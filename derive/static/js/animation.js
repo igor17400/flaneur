@@ -41,9 +41,9 @@
       const pct = Math.min((now - t0) / DURATION_MS, 1.0);
       const n = Math.floor(pct * total);
       const visible = data.history.slice(0, n + 1);
-      const showPred = pct >= 1.0;
+      const reveal = pct >= 1.0;
 
-      renderFn(visible, showPred ? data.ground_truth : [], showPred);
+      renderFn(visible, reveal ? data.ground_truth : [], reveal, reveal);
 
       // Update progress UI
       document.getElementById('progress-fill').style.width = pct * 100 + '%';
@@ -56,11 +56,13 @@
       if (pct < 1.0) {
         animFrame = requestAnimationFrame(step);
       } else {
-        // Reveal predictions after a beat
+        // Reveal ground truth + predictions after a beat
         setTimeout(() => {
-          renderFn(data.history, data.ground_truth, true);
-          document.getElementById('progress-date').textContent = 'Predictions revealed';
-          document.getElementById('progress-count').textContent = `${data.ground_truth.length} predicted`;
+          renderFn(data.history, data.ground_truth, true, true);
+          const nPreds = (data.predictions || []).length;
+          document.getElementById('progress-date').textContent = 'Results revealed';
+          document.getElementById('progress-count').textContent =
+            `${data.ground_truth.length} truth` + (nPreds ? ` + ${nPreds} predicted` : '');
         }, 300);
         animating = false;
         btn.textContent = 'Replay';

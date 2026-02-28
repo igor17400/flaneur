@@ -9,8 +9,9 @@ Usage:
     user_geo = gowalla.get_user_geo(uid=42)
 """
 
+import json
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -24,6 +25,8 @@ class GowallaData:
     user_timelines: dict[int, dict[int, str]]
     train_dict: dict[int, list[int]]
     test_dict: dict[int, list[int]]
+    predictions: dict[int, list[int]]  # user_id → [item_id, ...]
+    prediction_meta: dict  # model info (name, embed_dim, etc.)
 
     @property
     def n_users(self) -> int:
@@ -78,11 +81,27 @@ class GowallaData:
         else:
             label = "Neighborhood Local"
 
+        # Model predictions (if available for this user)
+        pred_items = self.predictions.get(uid, [])
+        predictions = []
+        for iid in pred_items:
+            org_loc = self.item_remap_to_org.get(iid)
+            if org_loc and org_loc in self.loc_coords:
+                lat, lon = self.loc_coords[org_loc]
+                predictions.append({
+                    "lat": round(lat, 6),
+                    "lon": round(lon, 6),
+                    "item_id": iid,
+                    "ts": None,
+                })
+
         return {
             "label": label,
             "org_uid": org_uid,
             "history": history,
             "ground_truth": ground_truth,
+            "predictions": predictions,
+            "prediction_model": self.prediction_meta.get("model", None),
             "spread": round(spread, 2),
         }
 
@@ -144,6 +163,23 @@ def load(data_dir: str | Path) -> GowallaData:
     train_dict = _parse_split(data_dir / "gowalla/train.txt")
     test_dict = _parse_split(data_dir / "gowalla/test.txt")
 
+    # Model predictions (optional)
+    predictions: dict[int, list[int]] = {}
+    prediction_meta: dict = {}
+    pred_path = data_dir / "predictions.json"
+    if pred_path.exists():
+        print("  Loading model predictions...")
+        with open(pred_path) as f:
+            pred_data = json.load(f)
+        prediction_meta = {
+            k: v for k, v in pred_data.items() if k != "users"
+        }
+        for uid_str, info in pred_data.get("users", {}).items():
+            predictions[int(uid_str)] = info["items"]
+        print(f"  Predictions loaded for {len(predictions)} users ({prediction_meta.get('model', '?')} model)")
+    else:
+        print("  No predictions.json found — run src/infer.py to generate")
+
     print(f"  Ready: {len(train_dict)} users, {len(item_remap_to_org)} items, {len(loc_coords)} locations")
 
     return GowallaData(
@@ -153,6 +189,8 @@ def load(data_dir: str | Path) -> GowallaData:
         user_timelines=dict(user_timelines),
         train_dict=train_dict,
         test_dict=test_dict,
+        predictions=predictions,
+        prediction_meta=prediction_meta,
     )
 
 

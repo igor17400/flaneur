@@ -31,9 +31,13 @@
     (idx) => {
       const data = userData[currentUser];
       if (!data) return;
-      const all = [...data.history, ...data.ground_truth];
+      const all = [...data.history, ...data.ground_truth, ...(data.predictions || [])];
       const pt = all[idx];
       if (pt) deriveMap.flyTo(pt.lat, pt.lon);
+    },
+    // onComparePair
+    (predPt, gtPt, distKm) => {
+      deriveMap.renderComparePair(predPt, gtPt, distKm);
     }
   );
 
@@ -119,7 +123,7 @@
 
     showAll();
     setTimeout(() => {
-      const all = [...data.history, ...data.ground_truth];
+      const all = [...data.history, ...data.ground_truth, ...(data.predictions || [])];
       deriveMap.fitBounds(all);
     }, 100);
   }
@@ -128,16 +132,26 @@
   function rerenderMap() {
     const data = userData[currentUser];
     if (!data) return;
-    deriveMap.renderLayers(data.history, data.ground_truth, true, highlightedIdx);
+    deriveMap.renderLayers(
+      data.history, data.ground_truth, data.predictions || [],
+      true, true, highlightedIdx
+    );
   }
 
-  function renderMapLayers(history, groundTruth, showPred) {
-    deriveMap.renderLayers(history, groundTruth, showPred, highlightedIdx);
+  function renderMapLayers(history, groundTruth, showGt, showPred) {
+    const data = userData[currentUser];
+    const preds = data ? (data.predictions || []) : [];
+    deriveMap.renderLayers(
+      history, groundTruth, preds,
+      showGt !== false, showPred !== false, highlightedIdx
+    );
   }
 
   function showAll() {
     if (deriveAnimation.isAnimating()) deriveAnimation.toggle(userData, currentUser, renderMapLayers);
     document.getElementById('progress').classList.remove('visible');
+    // Clear any active comparison row highlight
+    document.querySelectorAll('.compare-row.active').forEach((el) => el.classList.remove('active'));
     rerenderMap();
   }
 
