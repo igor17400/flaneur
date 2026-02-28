@@ -193,3 +193,118 @@ def render(
         yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
     )
     st.plotly_chart(fig_net, use_container_width=True)
+
+    # --- Small readable subgraph ---
+    st.subheader("Bipartite Structure (small subgraph)")
+    st.caption(
+        "A tiny slice: pick a few items from the seed user, then show a few other "
+        "users who also checked in at those items. This makes the user ↔ item "
+        "bipartite structure easy to read."
+    )
+
+    col_a, col_b = st.columns(2)
+    max_items = col_a.slider("Items to show", 2, 10, 4, key="mini_items")
+    max_neighbors = col_b.slider(
+        "Neighbor users per item", 1, 5, 2, key="mini_neighbors"
+    )
+
+    # Build an inverted index: item -> list of users (excluding seed)
+    rng_mini = np.random.default_rng(seed_user)
+    seed_items = list(train_dict[seed_user])
+    rng_mini.shuffle(seed_items)
+    picked_items = seed_items[:max_items]
+
+    item_to_users: dict[int, list[int]] = {it: [] for it in picked_items}
+    for u, items in train_dict.items():
+        if u == seed_user:
+            continue
+        u_items = set(items)
+        for it in picked_items:
+            if it in u_items and len(item_to_users[it]) < max_neighbors:
+                item_to_users[it].append(u)
+
+    # Layout: 3 columns — seed user (left), items (center), neighbor users (right)
+    sx, sy = [], []  # node positions
+    st_text, st_color, st_size = [], [], []
+    ex, ey = [], []  # edges
+
+    # Seed user
+    sx.append(0.0)
+    sy.append(0.0)
+    st_text.append(f"U{seed_user}")
+    st_color.append("#e74c3c")
+    st_size.append(18)
+
+    # Items column (x=2), evenly spaced vertically
+    item_positions: dict[int, tuple[float, float]] = {}
+    for idx, it in enumerate(picked_items):
+        iy = (idx - (len(picked_items) - 1) / 2) * 1.2
+        item_positions[it] = (2.0, iy)
+        sx.append(2.0)
+        sy.append(iy)
+        st_text.append(f"I{it}")
+        st_color.append("#3498db")
+        st_size.append(14)
+        # Edge: seed -> item
+        ex.extend([0.0, 2.0, None])
+        ey.extend([0.0, iy, None])
+
+    # Neighbor users column (x=4)
+    neighbor_y_offset = 0.0
+    placed_neighbors: dict[int, tuple[float, float]] = {}
+    for it in picked_items:
+        ix, iy = item_positions[it]
+        for j, u in enumerate(item_to_users[it]):
+            if u not in placed_neighbors:
+                ny = iy + (j - (len(item_to_users[it]) - 1) / 2) * 0.6
+                placed_neighbors[u] = (4.0, ny)
+                sx.append(4.0)
+                sy.append(ny)
+                st_text.append(f"U{u}")
+                st_color.append("#f39c12")
+                st_size.append(14)
+            ux, uy = placed_neighbors[u]
+            # Edge: item -> neighbor user
+            ex.extend([ix, ux, None])
+            ey.extend([iy, uy, None])
+
+    fig_mini = go.Figure()
+    fig_mini.add_trace(
+        go.Scatter(
+            x=ex,
+            y=ey,
+            mode="lines",
+            line=dict(width=1.5, color="#bbb"),
+            hoverinfo="none",
+        )
+    )
+    fig_mini.add_trace(
+        go.Scatter(
+            x=sx,
+            y=sy,
+            mode="markers+text",
+            text=st_text,
+            textposition="top center",
+            textfont=dict(size=10),
+            marker=dict(size=st_size, color=st_color, line=dict(width=1, color="#333")),
+            hoverinfo="text",
+        )
+    )
+    fig_mini.update_layout(
+        height=400,
+        showlegend=False,
+        margin=dict(l=20, r=20, t=20, b=20),
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+        yaxis=dict(
+            showgrid=False, zeroline=False, showticklabels=False, scaleanchor="x"
+        ),
+    )
+    st.plotly_chart(fig_mini, use_container_width=True)
+
+    st.markdown(
+        "**Legend:** "
+        ":red[seed user] · "
+        ":blue[items] · "
+        ":orange[neighbor users] — "
+        "Edges show check-ins. Two users are *similar* if they share item neighbors."
+    )
