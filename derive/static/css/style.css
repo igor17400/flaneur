@@ -243,3 +243,118 @@ body {
   background: rgba(16,185,129,0.15); padding: 1px 5px;
   border-radius: 3px; letter-spacing: 0.5px;
 }
+
+/* ── Explain button ────────────────────────────────────── */
+.btn-explain {
+  background: rgba(167,139,250,0.15);
+  border-color: rgba(167,139,250,0.3);
+  color: #a78bfa;
+}
+.btn-explain:hover {
+  background: rgba(167,139,250,0.25);
+  border-color: rgba(167,139,250,0.5);
+}
+
+/* ── Explain panel (right drawer) ──────────────────────── */
+.explain-panel {
+  position: absolute;
+  top: 0; right: 0;
+  width: 400px; height: 100%;
+  background: rgba(10,10,18,0.97);
+  backdrop-filter: blur(24px);
+  border-left: 1px solid rgba(255,255,255,0.06);
+  z-index: 20;
+  display: flex; flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.explain-panel.open {
+  transform: translateX(0);
+}
+
+.explain-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  flex-shrink: 0;
+}
+.explain-title {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 14px; font-weight: 600; color: #e0e0e0;
+}
+.explain-icon { font-size: 16px; }
+.explain-close {
+  width: 28px; height: 28px; border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.04);
+  color: #999; font-size: 18px; line-height: 1;
+  cursor: pointer; transition: all 0.2s;
+  display: flex; align-items: center; justify-content: center;
+}
+.explain-close:hover {
+  background: rgba(255,255,255,0.1);
+  color: #e0e0e0;
+}
+
+.explain-body {
+  flex: 1; overflow-y: auto;
+  padding: 20px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.1) transparent;
+}
+.explain-body::-webkit-scrollbar { width: 4px; }
+.explain-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+
+.explain-body p {
+  font-size: 13px; line-height: 1.7;
+  color: #ccc; margin-bottom: 14px;
+}
+.explain-body p:last-of-type { margin-bottom: 4px; }
+.explain-body strong { color: #e0e0e0; font-weight: 600; }
+.explain-body em { color: #a78bfa; font-style: italic; }
+
+.explain-error {
+  color: #ef4444; font-size: 13px; line-height: 1.6;
+}
+
+.explain-footer {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 20px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  flex-shrink: 0;
+}
+.explain-model {
+  font-size: 10px; color: #555;
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.5px;
+}
+.explain-status {
+  font-size: 10px; font-weight: 500;
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+.explain-status.connecting { color: #f59e0b; }
+.explain-status.streaming { color: #60a5fa; }
+.explain-status.done { color: #10b981; }
+.explain-status.error { color: #ef4444; }
+
+/* ── Blinking cursor ───────────────────────────────────── */
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+.explain-cursor {
+  display: inline-block;
+  width: 7px; height: 15px;
+  background: #a78bfa;
+  border-radius: 1px;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: blink 0.8s step-end infinite;
+}
+
+/* ── Adjust legend position when panel is open ─────────── */
+.explain-panel.open ~ .legend {
+  right: 424px;
+}

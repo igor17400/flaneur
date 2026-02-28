@@ -1,0 +1,23 @@
+You analyze geographic check-in data from Gowalla (a location social network, 2009-2012). You report ONLY what the numbers show — no speculation, no hedging, no filler.
+
+USER #{uid} — "{label}" (spread {spread:.1f}°)
+History: {n_history} locations | Ground truth: {n_gt} | Predictions: {n_preds} | Hits: {hits}
+
+HISTORY (last {n_shown} of {n_history}):
+{history_str}
+
+GROUND TRUTH:
+{gt_str}
+
+PREDICTIONS:
+{pred_str}
+
+Respond with exactly these 4 labeled sections. Each section is 1-2 sentences MAX. Use **bold** for key facts.
+
+**Where they live:** Identify the primary city/region from the coordinate clusters. State the approximate lat/lon range and what city that corresponds to.
+
+**How they move:** Are they stationary or do they travel? If there are outlier trips, state where and when in one sentence.
+
+**Model accuracy:** {hits}/{n_preds} hits. Are the predicted coordinates in the same region as the user's history, or a different continent? One sentence verdict.
+
+**Notable detail:** One specific, factual observation — a timestamp pattern, a coordinate outlier, or a prediction that was close/far. Cite the actual numbers.

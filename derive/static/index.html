@@ -85,6 +85,23 @@
   <button class="btn" id="btn-animate" onclick="toggleAnimation()">Animate</button>
   <button class="btn" onclick="showAll()">Show All</button>
   <button class="btn" onclick="fitBounds()">Fit View</button>
+  <button class="btn btn-explain" onclick="explainUser()">Explain</button>
+</div>
+
+<!-- ── Explain Panel (right drawer) ────────────────────── -->
+<div id="explain-panel" class="explain-panel">
+  <div class="explain-header">
+    <div class="explain-title">
+      <span class="explain-icon">&#x2728;</span>
+      <span id="explain-user">User</span>
+    </div>
+    <button class="explain-close" onclick="closeExplainPanel()">&times;</button>
+  </div>
+  <div class="explain-body" id="explain-body"></div>
+  <div class="explain-footer">
+    <span class="explain-model">mistral-medium-latest</span>
+    <span id="explain-status" class="explain-status">idle</span>
+  </div>
 </div>
 
 <div class="progress-container" id="progress">
@@ -99,6 +116,7 @@
 <script src="/static/js/map.js"></script>
 <script src="/static/js/timeline.js"></script>
 <script src="/static/js/animation.js"></script>
+<script src="/static/js/explain.js"></script>
 <script src="/static/js/app.js"></script>
 
 </body>

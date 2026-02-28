@@ -112,6 +112,9 @@
   function selectUser(uid) {
     if (deriveAnimation.isAnimating()) deriveAnimation.toggle(userData, currentUser, renderMapLayers);
 
+    // Close explain panel when switching users
+    if (deriveExplain.isOpen()) deriveExplain.close();
+
     currentUser = uid;
     highlightedIdx = -1;
     const data = userData[uid];
@@ -168,6 +171,21 @@
   // ── Boot ───────────────────────────────────────────────────────────────
   mapInstance.on('load', () => randomUser());
 
+  // ── Explain panel ──────────────────────────────────────────────────────
+  function explainUser() {
+    if (currentUser == null) return;
+    const data = userData[currentUser];
+    if (!data || !data.predictions || data.predictions.length === 0) {
+      deriveExplain.showNoPredictions(currentUser);
+      return;
+    }
+    deriveExplain.open(currentUser);
+  }
+
+  function closeExplainPanel() {
+    deriveExplain.close();
+  }
+
   // Expose globals for HTML onclick handlers
   window.deriveApp = { selectUser };
   window.searchUser = searchUser;
@@ -175,4 +193,6 @@
   window.showAll = showAll;
   window.fitBounds = fitBounds;
   window.toggleAnimation = toggleAnimation;
+  window.explainUser = explainUser;
+  window.closeExplainPanel = closeExplainPanel;
 })();
