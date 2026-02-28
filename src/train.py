@@ -96,33 +96,33 @@ def train(cfg, dataset: Dataset):
 
             log_dict = {"train/bpr_loss": avg_loss, "train/epoch_time_sec": epoch_time}
 
-            # Periodic evaluation
+            # Periodic evaluation on validation set
             if epoch % cfg.train.eval_every == 0:
                 all_embed = lightgcn_forward(params, dataset.adj_norm, cfg.model.n_layers)
-                metrics = evaluate(
+                val_metrics = evaluate(
                     all_embed,
                     dataset.n_users,
                     dataset.n_items,
                     dataset.train_dict,
-                    dataset.test_dict,
+                    dataset.val_dict,
                     topk=cfg.train.topk,
                 )
-                recall = metrics["recall"]
-                ndcg = metrics["ndcg"]
-                log_dict["eval/recall@20"] = recall
-                log_dict["eval/ndcg@20"] = ndcg
+                recall = val_metrics["recall"]
+                ndcg = val_metrics["ndcg"]
+                log_dict["val/recall@20"] = recall
+                log_dict["val/ndcg@20"] = ndcg
 
                 if recall > best_recall:
                     best_recall = recall
                     best_ndcg = ndcg
                     if cfg.wandb.enabled:
-                        wandb.summary["best_recall@20"] = best_recall
-                        wandb.summary["best_ndcg@20"] = best_ndcg
+                        wandb.summary["best_val_recall@20"] = best_recall
+                        wandb.summary["best_val_ndcg@20"] = best_ndcg
 
                 console.print(
                     f"  [green]Epoch {epoch}[/green]: loss={avg_loss:.4f} | "
-                    f"Recall@20={recall:.4f} | NDCG@20={ndcg:.4f} | "
-                    f"Best Recall@20=[bold]{best_recall:.4f}[/bold]"
+                    f"Val Recall@20={recall:.4f} | Val NDCG@20={ndcg:.4f} | "
+                    f"Best Val Recall@20=[bold]{best_recall:.4f}[/bold]"
                 )
 
             if cfg.wandb.enabled:

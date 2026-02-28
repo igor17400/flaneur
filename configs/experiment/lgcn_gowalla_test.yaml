@@ -2,7 +2,7 @@
 
 wandb:
   project: flaneur
-  enabled: false
+  enabled: true
   run_name: lgcn_gowalla_test
 
 model:

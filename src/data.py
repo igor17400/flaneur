@@ -108,36 +108,76 @@ class Dataset:
     n_items: int
     adj_norm: jsparse.BCOO
     train_dict: dict[int, list[int]]
+    val_dict: dict[int, list[int]]
     test_dict: dict[int, list[int]]
     n_train: int
 
 
-def load_dataset(data_dir: str) -> Dataset:
-    """Load and preprocess the Gowalla dataset."""
+def _split_train_val(
+    train_dict: dict[int, list[int]],
+    val_ratio: float = 0.1,
+    seed: int = 2020,
+) -> tuple[dict[int, list[int]], dict[int, list[int]]]:
+    """Split train interactions per user into train + val."""
+    rng = np.random.default_rng(seed)
+    new_train: dict[int, list[int]] = {}
+    val: dict[int, list[int]] = {}
+    for user, items in train_dict.items():
+        if len(items) < 2:
+            # Too few items to split — keep all in train
+            new_train[user] = items
+            continue
+        items_arr = np.array(items)
+        rng.shuffle(items_arr)
+        n_val = max(1, int(len(items_arr) * val_ratio))
+        val[user] = items_arr[:n_val].tolist()
+        new_train[user] = items_arr[n_val:].tolist()
+    return new_train, val
+
+
+def load_dataset(data_dir: str, val_ratio: float = 0.1, seed: int = 2020) -> Dataset:
+    """Load and preprocess the Gowalla dataset with train/val/test split."""
     train_file, test_file = _download_if_missing(data_dir)
-    train_dict = _parse_interactions(train_file)
+    raw_train_dict = _parse_interactions(train_file)
     test_dict = _parse_interactions(test_file)
 
+    # Split raw train into train + val
+    train_dict, val_dict = _split_train_val(raw_train_dict, val_ratio, seed)
+
     n_users = (
-        max(max(train_dict.keys(), default=0), max(test_dict.keys(), default=0)) + 1
+        max(
+            max(train_dict.keys(), default=0),
+            max(val_dict.keys(), default=0),
+            max(test_dict.keys(), default=0),
+        )
+        + 1
     )
     all_items = set()
     for items in train_dict.values():
+        all_items.update(items)
+    for items in val_dict.values():
         all_items.update(items)
     for items in test_dict.values():
         all_items.update(items)
     n_items = max(all_items) + 1 if all_items else 0
 
     n_train = sum(len(v) for v in train_dict.values())
+    n_val = sum(len(v) for v in val_dict.values())
 
-    print(f"Dataset: {n_users} users, {n_items} items, {n_train} train interactions")
+    print(
+        f"Dataset: {n_users} users, {n_items} items, "
+        f"{n_train} train / {n_val} val / "
+        f"{sum(len(v) for v in test_dict.values())} test interactions"
+    )
 
+    # Adjacency matrix built from train only (no val leakage)
     adj_norm = _build_adj_norm(train_dict, n_users, n_items)
     return Dataset(
         n_users=n_users,
         n_items=n_items,
         adj_norm=adj_norm,
         train_dict=train_dict,
+        val_dict=val_dict,
         test_dict=test_dict,
         n_train=n_train,
     )

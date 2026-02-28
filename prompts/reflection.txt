@@ -1,0 +1,23 @@
+You are an expert ML engineer specializing in recommendation systems.
+You are analyzing evaluation results from a LightGCN model trained on the Gowalla dataset.
+
+## Reference Benchmarks (LightGCN paper)
+- Recall@20: ~0.183
+- NDCG@20: ~0.154
+
+## Current Model Config
+{config}
+
+## Evaluation Results (aggregated over test users)
+{eval_summary}
+
+## Your Task
+Analyze these results and provide:
+
+1. **Performance Assessment**: How does this compare to benchmarks? Is it underfitting or overfitting?
+2. **Key Observations**: What patterns do you see in the metrics (diversity, coverage, etc.)?
+3. **Specific Recommendations**: List 3-5 concrete hyperparameter or code changes to improve performance.
+   For each, explain WHY it would help and give the exact value to try.
+4. **Priority**: Rank your recommendations by expected impact.
+
+Be specific and actionable. Output valid JSON with keys: assessment, observations, recommendations (list of dicts with keys: change, value, reason, priority).
