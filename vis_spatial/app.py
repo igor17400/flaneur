@@ -1,5 +1,7 @@
 """Flâneur — Data Explorer: Streamlit entry point."""
 
+from pathlib import Path
+
 import streamlit as st
 
 st.set_page_config(layout="wide", page_title="Flâneur — Data Explorer")
@@ -7,6 +9,10 @@ st.set_page_config(layout="wide", page_title="Flâneur — Data Explorer")
 from utils import load_data  # noqa: E402
 
 st.title("Flâneur — Gowalla Data Explorer")
+
+_about = (Path(__file__).parent / "about.md").read_text()
+with st.expander("About the Gowalla dataset & the recommendation task", expanded=False):
+    st.markdown(_about)
 
 train_dict, test_dict, n_users, n_items = load_data()
 
