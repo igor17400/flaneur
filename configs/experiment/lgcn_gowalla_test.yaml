@@ -17,7 +17,7 @@ train:
   lr: 1e-3
   reg_weight: 1e-4
   batch_size: 2048
-  epochs: 5
+  epochs: 2
   topk: 20
   eval_every: 1
   seed: 2020
