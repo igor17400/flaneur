@@ -1,0 +1,5 @@
+defaults:
+  - model: lightgcn
+  - data: gowalla
+  - experiment: default
+  - _self_

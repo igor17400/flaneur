@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+wheels/
+*.whl
+
+# Virtual environments
+.venv/
+venv/
+env/
+.python-version
+
+# uv
+uv.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Hydra outputs
+outputs/
+multirun/
+
+# W&B
+wandb/
+
+# Data (auto-downloaded)
+data/gowalla/*.txt
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment variables
+.env
+.env.*
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+.Spotlight-V100
+.Trashes
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+.directory
+
+# Logs
+*.log
+
+# Model checkpoints / artifacts
+*.pkl
+*.pickle
+*.npy
+*.npz

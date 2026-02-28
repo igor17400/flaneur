@@ -1,0 +1,23 @@
+# @package _global_
+
+wandb:
+  project: flaneur
+  enabled: true
+  run_name: lgcn_gowalla_full
+
+model:
+  embed_dim: 64
+  n_layers: 3
+
+data:
+  name: gowalla
+  data_dir: data/gowalla
+
+train:
+  lr: 1e-3
+  reg_weight: 1e-4
+  batch_size: 2048
+  epochs: 1000
+  topk: 20
+  eval_every: 10
+  seed: 2020
