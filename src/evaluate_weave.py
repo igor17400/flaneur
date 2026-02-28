@@ -27,6 +27,7 @@ user_embed: np.ndarray = None
 item_embed: np.ndarray = None
 train_dict: dict[int, list[int]] = {}
 test_dict: dict[int, list[int]] = {}
+item_popularity: np.ndarray = None
 run_config: dict = {}
 TOPK = 20
 
@@ -73,7 +74,7 @@ def list_checkpoints() -> list[Path]:
 
 def load_checkpoint(checkpoint_dir: str):
     """Load saved embeddings and metadata from training."""
-    global user_embed, item_embed, train_dict, test_dict, run_config
+    global user_embed, item_embed, train_dict, test_dict, run_config, item_popularity
 
     ckpt = Path(checkpoint_dir)
     data = np.load(ckpt / "embeddings.npz")
@@ -90,6 +91,13 @@ def load_checkpoint(checkpoint_dir: str):
     train_dict = {int(k): v for k, v in meta["train_dict"].items()}
     test_dict = {int(k): v for k, v in meta["test_dict"].items()}
     run_config = meta.get("config", {})
+
+    # Pre-compute item popularity (avoids O(n_users) per scorer call)
+    item_popularity = np.zeros(n_items, dtype=np.int32)
+    for items in train_dict.values():
+        for item in items:
+            if item < n_items:
+                item_popularity[item] += 1
 
     console.print(
         f"[bold]Loaded:[/bold] {meta.get('run_name', ckpt.name)} — "
@@ -172,15 +180,11 @@ def diversity_scorer(model_output: dict) -> dict:
 def coverage_scorer(model_output: dict) -> dict:
     """Per-user item popularity stats (cold items vs popular)."""
     recs = model_output["recommendations"]
-    # Count how many times each recommended item appears in training
-    popularities = []
-    for item in recs:
-        pop = sum(1 for items in train_dict.values() if item in set(items))
-        popularities.append(pop)
+    pops = item_popularity[recs]
     return {
-        "avg_item_popularity": float(np.mean(popularities)),
-        "min_item_popularity": int(np.min(popularities)),
-        "cold_items_recommended": int(sum(1 for p in popularities if p < 5)),
+        "avg_item_popularity": float(np.mean(pops)),
+        "min_item_popularity": int(np.min(pops)),
+        "cold_items_recommended": int(np.sum(pops < 5)),
     }
 
 

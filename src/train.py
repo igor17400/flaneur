@@ -22,11 +22,20 @@ def train(cfg, dataset: Dataset):
     key = jax.random.PRNGKey(cfg.train.seed)
     params = init_params(dataset.n_users, dataset.n_items, cfg.model.embed_dim, key)
 
-    optimizer = optax.adam(cfg.train.lr)
+    # Learning rate schedule: cosine decay
+    total_steps = cfg.train.epochs * (dataset.n_train // cfg.train.batch_size + 1)
+    lr_schedule = optax.cosine_decay_schedule(
+        init_value=cfg.train.lr,
+        decay_steps=total_steps,
+        alpha=0.01,  # final lr = 1% of initial
+    )
+    optimizer = optax.adam(lr_schedule)
     opt_state = optimizer.init(params)
 
+    embed_dropout = getattr(cfg.model, "embed_dropout", 0.0)
+
     @jax.jit
-    def train_step(params, opt_state, users, pos_items, neg_items):
+    def train_step(params, opt_state, users, pos_items, neg_items, dropout_key):
         loss, grads = jax.value_and_grad(bpr_loss)(
             params,
             dataset.adj_norm,
@@ -36,6 +45,8 @@ def train(cfg, dataset: Dataset):
             pos_items,
             neg_items,
             cfg.train.reg_weight,
+            embed_dropout,
+            dropout_key,
         )
         updates, new_opt_state = optimizer.update(grads, opt_state, params)
         new_params = optax.apply_updates(params, updates)
@@ -44,6 +55,8 @@ def train(cfg, dataset: Dataset):
     rng = np.random.default_rng(cfg.train.seed)
     best_recall = 0.0
     best_ndcg = 0.0
+    patience = getattr(cfg.train, "patience", 0)  # 0 = disabled
+    epochs_without_improvement = 0
 
     progress = Progress(
         TextColumn("[bold blue]{task.description}"),
@@ -83,8 +96,9 @@ def train(cfg, dataset: Dataset):
                 batch_p = jnp.array(pos_items[start:end])
                 batch_n = jnp.array(neg_items[start:end])
 
+                key, dropout_key = jax.random.split(key)
                 params, opt_state, loss = train_step(
-                    params, opt_state, batch_u, batch_p, batch_n
+                    params, opt_state, batch_u, batch_p, batch_n, dropout_key
                 )
                 epoch_loss += float(loss)
                 n_batches += 1
@@ -115,15 +129,28 @@ def train(cfg, dataset: Dataset):
                 if recall > best_recall:
                     best_recall = recall
                     best_ndcg = ndcg
+                    epochs_without_improvement = 0
                     if cfg.wandb.enabled:
                         wandb.summary["best_val_recall@20"] = best_recall
                         wandb.summary["best_val_ndcg@20"] = best_ndcg
+                else:
+                    epochs_without_improvement += cfg.train.eval_every
 
                 console.print(
                     f"  [green]Epoch {epoch}[/green]: loss={avg_loss:.4f} | "
                     f"Val Recall@20={recall:.4f} | Val NDCG@20={ndcg:.4f} | "
                     f"Best Val Recall@20=[bold]{best_recall:.4f}[/bold]"
                 )
+
+                # Early stopping
+                if patience > 0 and epochs_without_improvement >= patience:
+                    console.print(
+                        f"  [yellow]Early stopping at epoch {epoch} "
+                        f"(no improvement for {patience} epochs)[/yellow]"
+                    )
+                    if cfg.wandb.enabled:
+                        wandb.log(log_dict, step=epoch)
+                    break
 
             if cfg.wandb.enabled:
                 wandb.log(log_dict, step=epoch)

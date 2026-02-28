@@ -13,10 +13,21 @@ def init_params(n_users: int, n_items: int, embed_dim: int, key: jax.Array) -> d
 
 
 def lightgcn_forward(
-    params: dict, adj_norm: jsparse.BCOO, n_layers: int
+    params: dict,
+    adj_norm: jsparse.BCOO,
+    n_layers: int,
+    embed_dropout: float = 0.0,
+    key: jax.Array | None = None,
+    training: bool = False,
 ) -> jnp.ndarray:
     """LightGCN propagation: mean of layer-0..K embeddings."""
     ego_embed = params["embedding"]
+
+    # Embedding dropout during training
+    if training and embed_dropout > 0.0 and key is not None:
+        mask = jax.random.bernoulli(key, 1.0 - embed_dropout, ego_embed.shape)
+        ego_embed = ego_embed * mask / (1.0 - embed_dropout)
+
     all_embeds = [ego_embed]
     x = ego_embed
     for _ in range(n_layers):
@@ -34,9 +45,14 @@ def bpr_loss(
     pos_items: jnp.ndarray,
     neg_items: jnp.ndarray,
     reg_weight: float,
+    embed_dropout: float = 0.0,
+    key: jax.Array | None = None,
 ) -> jnp.ndarray:
     """BPR loss with L2 regularization on ego embeddings."""
-    all_embed = lightgcn_forward(params, adj_norm, n_layers)
+    all_embed = lightgcn_forward(
+        params, adj_norm, n_layers,
+        embed_dropout=embed_dropout, key=key, training=key is not None,
+    )
 
     user_embed = all_embed[users]
     pos_embed = all_embed[n_users + pos_items]
