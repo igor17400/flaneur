@@ -20,14 +20,14 @@ This project uses three Claude Code skills in a loop:
 ## Key Commands
 
 ```bash
-# Train with a specific experiment config
-uv run python src/main.py experiment=lgcn_gowalla_v2
+# Train with the experiment config
+uv run python src/main.py experiment=lgcn_gowalla_full
 
 # Override hyperparams via CLI
-uv run python src/main.py experiment=default train.lr=0.005 model.embed_dim=128
+uv run python src/main.py experiment=lgcn_gowalla_full train.lr=0.005 model.embed_dim=128
 
 # Run Weave evaluation on a checkpoint
-uv run python src/evaluate_weave.py --run lgcn_gowalla_v2 --n_users 200
+uv run python src/evaluate_weave.py --run lgcn_gowalla_full --n_users 200
 
 # List available checkpoints
 uv run python src/evaluate_weave.py --list
@@ -35,8 +35,8 @@ uv run python src/evaluate_weave.py --list
 
 ## Conventions
 - Use `uv run` for all Python execution
-- Experiment configs go in `configs/experiment/`
-- Name configs as `lgcn_gowalla_v{N}.yaml` with increment per iteration
-- Always include a comment at the top of configs explaining what changed
+- Edit `configs/experiment/lgcn_gowalla_full.yaml` in-place (do NOT create v2, v3, etc.)
+- W&B and git history track the evolution across runs
+- Always include a comment at the top of the config explaining what changed
 - Checkpoints save to `checkpoints/{run_name}/`
 - Prompts for Mistral reflection live in `prompts/`

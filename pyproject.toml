@@ -18,4 +18,5 @@ dependencies = [
     "rich>=14.0.0",
     "wandb>=0.25.0",
     "weave>=0.51.0",
+    "wandb-workspaces>=0.3.5",
 ]

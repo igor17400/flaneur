@@ -1,12 +1,12 @@
 ---
 name: improve-model
-description: Apply improvements to the LightGCN model based on analysis from /analyze-run. Creates new experiment configs, modifies code if needed, and prepares the next training run.
+description: Apply improvements to the LightGCN model based on analysis from /analyze-run. Edits the experiment config in-place, modifies code if needed, and prepares the next training run.
 allowed-tools: Read, Edit, Write, Bash, Glob, Grep
 ---
 
 # Improve Model
 
-Apply concrete improvements to LightGCN based on run analysis. This skill creates a new experiment config and optionally modifies source code.
+Apply concrete improvements to LightGCN based on run analysis. This skill edits the existing experiment config in-place and optionally modifies source code.
 
 ## Project Structure
 
@@ -15,9 +15,9 @@ Apply concrete improvements to LightGCN based on run analysis. This skill create
 - Training: `src/train.py` (training loop, optimizer, eval)
 - Data: `src/data.py` (dataset loading, adjacency matrix, negative sampling)
 
-## Step 1: Read Current Best Config
+## Step 1: Read Current Config
 
-Read the latest experiment config and the current source code to understand what's already been tried.
+Read the experiment config `configs/experiment/lgcn_gowalla_full.yaml` and source code to understand the current state.
 
 ## Step 2: Determine Changes
 
@@ -41,38 +41,11 @@ Based on the analysis, select from these improvement levers:
 - **Xavier init**: scale init by 1/sqrt(embed_dim) in `model.py`
 - **Multiple negatives**: sample K negatives per positive in `data.py`
 
-## Step 3: Create New Experiment Config
+## Step 3: Edit Experiment Config In-Place
 
-Create a new file at `configs/experiment/lgcn_gowalla_v{N}.yaml`:
+Edit `configs/experiment/lgcn_gowalla_full.yaml` directly. Update the comment at the top to explain what changed and why. Keep `run_name: lgcn_gowalla_full` — W&B tracks each run separately even with the same name.
 
-```yaml
-# @package _global_
-# v{N}: {describe what changed and why}
-
-wandb:
-  project: flaneur
-  enabled: true
-  run_name: lgcn_gowalla_v{N}
-
-model:
-  embed_dim: {value}
-  n_layers: {value}
-  embed_dropout: {value}
-
-data:
-  name: gowalla
-  data_dir: data/gowalla
-
-train:
-  lr: {value}
-  reg_weight: {value}
-  batch_size: {value}
-  epochs: 1000
-  topk: 20
-  eval_every: 10
-  seed: 2020
-  patience: {value}
-```
+**Important**: Do NOT create new config files (v2, v3, etc.). Always edit `lgcn_gowalla_full.yaml` in-place. W&B and git history track the evolution.
 
 ## Step 4: Apply Code Changes (if needed)
 
@@ -85,11 +58,11 @@ If the improvement requires code changes, edit the relevant source files. Always
 
 Provide:
 1. **What changed**: list of param/code changes with reasoning
-2. **New config file**: path to the created experiment config
+2. **Config file**: path to the edited experiment config
 3. **Run command**: exact command to start training
 4. **Expected outcome**: what metric improvement to expect and why
 
-Example run command:
+Run command:
 ```bash
-uv run python src/main.py experiment=lgcn_gowalla_v{N}
+uv run python src/main.py experiment=lgcn_gowalla_full
 ```

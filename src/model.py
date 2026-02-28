@@ -8,7 +8,8 @@ import jax.numpy as jnp
 def init_params(n_users: int, n_items: int, embed_dim: int, key: jax.Array) -> dict:
     """Initialize user and item embeddings (single matrix)."""
     n_nodes = n_users + n_items
-    embedding = jax.random.normal(key, (n_nodes, embed_dim)) * 0.1
+    # Xavier uniform init: scale = 1/sqrt(embed_dim)
+    embedding = jax.random.normal(key, (n_nodes, embed_dim)) * (1.0 / jnp.sqrt(embed_dim))
     return {"embedding": embedding}
 
 
