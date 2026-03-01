@@ -1,5 +1,7 @@
 # Flaneur
 
+[![Demo Video](https://img.shields.io/badge/Demo-YouTube-red?logo=youtube)](https://youtu.be/s6rvHhWhWIA)
+
 A self-improving LightGCN recommender system for location check-in prediction on the Gowalla dataset. Built with JAX, Mistral, W&B Weave, and Claude Code.
 
 Flaneur combines a JAX-based LightGCN model with an agentic self-improvement loop: train, analyze metrics via W&B MCP, apply fixes, evaluate with Weave, and repeat — all orchestrated through Claude Code skills.
@@ -96,17 +98,18 @@ flaneur/
 
 The project uses seven Claude Code skills in a loop:
 
-| Skill | Purpose |
-|-------|---------|
-| `/analyze-run` | Query W&B for training metrics, diagnose issues |
-| `/improve-model` | Apply config/code changes based on analysis |
-| `/apply-fix` | Implement a single focused improvement |
-| `/ablation` | Sweep one parameter with Hydra multirun |
-| `/weave-eval` | Quick Weave evaluation on test set |
-| `/eval-report` | Full Weave eval + W&B Report for the journey |
-| `/project-changelog` | Generate a W&B Report tracking all changes |
+| Skill                | Purpose                                         |
+| -------------------- | ----------------------------------------------- |
+| `/analyze-run`       | Query W&B for training metrics, diagnose issues |
+| `/improve-model`     | Apply config/code changes based on analysis     |
+| `/apply-fix`         | Implement a single focused improvement          |
+| `/ablation`          | Sweep one parameter with Hydra multirun         |
+| `/weave-eval`        | Quick Weave evaluation on test set              |
+| `/eval-report`       | Full Weave eval + W&B Report for the journey    |
+| `/project-changelog` | Generate a W&B Report tracking all changes      |
 
 Typical workflow:
+
 ```
 /analyze-run  ->  /improve-model  ->  train  ->  /analyze-run  ->  ...  ->  /eval-report
 ```
@@ -123,15 +126,15 @@ Typical workflow:
 
 Key hyperparameters (in `configs/experiment/lgcn_gowalla_full.yaml`):
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `model.embed_dim` | 128 | Embedding dimension |
-| `model.n_layers` | 4 | GCN propagation layers |
-| `train.lr` | 1e-3 | Learning rate |
-| `train.reg_weight` | 1e-5 | L2 regularization |
-| `train.batch_size` | 2048 | Mini-batch size |
-| `train.n_negatives` | 3 | Negative samples per positive |
-| `train.epochs` | 100 | Training epochs |
+| Parameter           | Default | Description                   |
+| ------------------- | ------- | ----------------------------- |
+| `model.embed_dim`   | 128     | Embedding dimension           |
+| `model.n_layers`    | 4       | GCN propagation layers        |
+| `train.lr`          | 1e-3    | Learning rate                 |
+| `train.reg_weight`  | 1e-5    | L2 regularization             |
+| `train.batch_size`  | 2048    | Mini-batch size               |
+| `train.n_negatives` | 3       | Negative samples per positive |
+| `train.epochs`      | 100     | Training epochs               |
 
 ## Dataset
 
@@ -147,6 +150,7 @@ Key hyperparameters (in `configs/experiment/lgcn_gowalla_full.yaml`):
 An interactive browser app for exploring user check-in patterns and model predictions.
 
 **Features:**
+
 - Interactive Leaflet map with history, ground truth, and prediction layers
 - Mistral-powered chat agent with behavioral analysis tools
 - User comparison, behavioral profiling, movement classification
@@ -155,6 +159,7 @@ An interactive browser app for exploring user check-in patterns and model predic
 - Weave-traced conversations (each chat turn links to W&B)
 
 **Chat Agent Tools:**
+
 - `analyze_behavior(uid)` -- Movement style, revisit patterns, geographic clustering, prediction accuracy breakdown
 - `compare_users(uid_a, uid_b)` -- Side-by-side behavioral comparison with similarity score (0-100)
 - `lookup_user`, `get_user_detail`, `find_users`, `get_model_stats` -- Data retrieval
@@ -180,16 +185,16 @@ Provisions an EC2 instance with the Derive server accessible on port 80.
 
 ## Tech Stack
 
-| Layer | Technology |
-|-------|-----------|
-| Model | JAX, Optax, SciPy (sparse) |
-| Config | Hydra, OmegaConf |
-| Tracking | W&B, Weave |
+| Layer      | Technology                                |
+| ---------- | ----------------------------------------- |
+| Model      | JAX, Optax, SciPy (sparse)                |
+| Config     | Hydra, OmegaConf                          |
+| Tracking   | W&B, Weave                                |
 | Chat agent | Mistral (function calling, SSE streaming) |
-| Automation | Claude Code skills |
-| Frontend | Leaflet, Chart.js, vanilla JS |
-| Server | Python stdlib (http.server, threading) |
-| Deploy | Terraform, AWS EC2 |
+| Automation | Claude Code skills                        |
+| Frontend   | Leaflet, Chart.js, vanilla JS             |
+| Server     | Python stdlib (http.server, threading)    |
+| Deploy     | Terraform, AWS EC2                        |
 
 ## License
 
