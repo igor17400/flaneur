@@ -9,10 +9,15 @@ Usage:
     user_geo = gowalla.get_user_geo(uid=42, model="dim256_layers4_...")
 """
 
+import gzip
 import json
+import shutil
+import urllib.request
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
+
+SNAP_CHECKINS_URL = "https://snap.stanford.edu/data/loc-gowalla_totalCheckins.txt.gz"
 
 
 @dataclass
@@ -152,10 +157,22 @@ def load(data_dir: str | Path) -> GowallaData:
             user_remap_to_org[int(remap_id)] = int(org_id)
 
     # SNAP check-in coordinates + timestamps
+    raw_dir = data_dir / "gowalla_raw"
+    checkins_path = raw_dir / "loc-gowalla_totalCheckins.txt"
+    if not checkins_path.exists():
+        print("  Downloading SNAP Gowalla check-ins (~100 MB)...")
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        gz_path = raw_dir / "loc-gowalla_totalCheckins.txt.gz"
+        urllib.request.urlretrieve(SNAP_CHECKINS_URL, gz_path)
+        with gzip.open(gz_path, "rb") as f_in, open(checkins_path, "wb") as f_out:
+            shutil.copyfileobj(f_in, f_out)
+        gz_path.unlink()
+        print("  Download complete.")
+
     print("  Loading SNAP coordinates (6.4M rows)...")
     loc_coords: dict[int, tuple[float, float]] = {}
     user_timelines: dict[int, dict[int, str]] = defaultdict(dict)
-    with open(data_dir / "gowalla_raw/loc-gowalla_totalCheckins.txt") as f:
+    with open(checkins_path) as f:
         for line in f:
             parts = line.strip().split("\t")
             if len(parts) != 5:

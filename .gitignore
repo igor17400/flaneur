@@ -35,6 +35,7 @@ wandb/
 
 # Data (auto-downloaded)
 data/gowalla/*.txt
+data/gowalla_raw/
 
 # Jupyter
 .ipynb_checkpoints/
