@@ -1,6 +1,6 @@
 # Flaneur
 
-[![Demo Video](https://img.shields.io/badge/Demo-YouTube-red?logo=youtube)](https://youtu.be/s6rvHhWhWIA)
+[![Demo Video](https://img.shields.io/badge/Demo-YouTube-red?logo=youtube)](https://youtu.be/s6rvHhWhWIA) **Video demonstration:** [youtu.be/s6rvHhWhWIA](https://youtu.be/s6rvHhWhWIA)
 
 A self-improving LightGCN recommender system for location check-in prediction on the Gowalla dataset. Built with JAX, Mistral, W&B Weave, and Claude Code.
 
