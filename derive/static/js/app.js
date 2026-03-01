@@ -1,5 +1,6 @@
 /**
  * app.js — Main application controller. Wires map, timeline, and animation together.
+ * Supports switching between multiple prediction models.
  *
  * Exports (via window.deriveApp):
  *   selectUser(uid) – load and display a user
@@ -11,6 +12,8 @@
   let userData = {};
   let recentUsers = [];
   let highlightedIdx = -1;
+  let currentModel = null;   // current model name (null = default)
+  let availableModels = [];   // [{name, embed_dim, ...}]
 
   // ── Init ───────────────────────────────────────────────────────────────
   const mapInstance = deriveMap.initMap();
@@ -41,6 +44,61 @@
     }
   );
 
+  // ── Model selector ──────────────────────────────────────────────────────
+  const modelSelect = document.getElementById('model-select');
+  const modelInfo = document.getElementById('model-info');
+
+  async function loadModels() {
+    try {
+      const res = await fetch('/api/models');
+      const data = await res.json();
+      availableModels = data.models || [];
+      currentModel = data.default || null;
+
+      modelSelect.innerHTML = '';
+      availableModels.forEach((m) => {
+        const opt = document.createElement('option');
+        opt.value = m.name;
+        // Build a readable label
+        const recall = m.val_recall_at_20 != null
+          ? ` (R@20: ${(m.val_recall_at_20 * 100).toFixed(1)}%)`
+          : ' (untrained)';
+        opt.textContent = m.name + recall;
+        if (m.name === currentModel) opt.selected = true;
+        modelSelect.appendChild(opt);
+      });
+
+      updateModelInfo();
+    } catch (e) {
+      modelSelect.innerHTML = '<option value="">No models</option>';
+    }
+  }
+
+  function updateModelInfo() {
+    const meta = availableModels.find((m) => m.name === currentModel);
+    if (!meta) {
+      modelInfo.textContent = '';
+      return;
+    }
+    const parts = [];
+    if (meta.embed_dim) parts.push(`dim=${meta.embed_dim}`);
+    if (meta.n_layers) parts.push(`layers=${meta.n_layers}`);
+    if (meta.lr) parts.push(`lr=${meta.lr}`);
+    if (meta.reg_weight) parts.push(`reg=${meta.reg_weight}`);
+    modelInfo.textContent = parts.join(' · ');
+  }
+
+  modelSelect.addEventListener('change', () => {
+    currentModel = modelSelect.value;
+    updateModelInfo();
+    // Clear cached user data (predictions depend on model)
+    userData = {};
+    // Reload current user with new model
+    if (currentUser != null) {
+      loadAndSelectUser(currentUser);
+    }
+  });
+
   // ── Search ─────────────────────────────────────────────────────────────
   const searchInput = document.getElementById('search-input');
   const searchError = document.getElementById('search-error');
@@ -64,10 +122,18 @@
     await loadAndSelectUser(uid);
   }
 
+  function _apiUrl(path) {
+    if (currentModel) {
+      const sep = path.includes('?') ? '&' : '?';
+      return path + sep + 'model=' + encodeURIComponent(currentModel);
+    }
+    return path;
+  }
+
   async function randomUser() {
     showError('');
     try {
-      const res = await fetch('/api/random');
+      const res = await fetch(_apiUrl('/api/random'));
       const data = await res.json();
       searchInput.value = data.uid;
       userData[data.uid] = data;
@@ -86,7 +152,7 @@
       return;
     }
     try {
-      const res = await fetch(`/api/user/${uid}`);
+      const res = await fetch(_apiUrl(`/api/user/${uid}`));
       if (!res.ok) {
         const err = await res.json();
         showError(err.error || 'Not found');
@@ -169,7 +235,10 @@
   }
 
   // ── Boot ───────────────────────────────────────────────────────────────
-  mapInstance.on('load', () => randomUser());
+  mapInstance.on('load', async () => {
+    await loadModels();
+    randomUser();
+  });
 
   // ── Explain panel ──────────────────────────────────────────────────────
   function explainUser() {

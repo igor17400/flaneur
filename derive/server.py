@@ -9,11 +9,12 @@ Usage:
     uv run python derive/server.py
 
 API:
-    GET /                     -> main app (index.html)
-    GET /api/user/{id}        -> geo data for a LightGCN user
-    GET /api/random           -> geo data for a random user
-    GET /api/stats            -> dataset summary
-    GET /api/explain/{id}     -> SSE stream of Mistral explanation
+    GET /                           -> main app (index.html)
+    GET /api/models                 -> available models with metadata
+    GET /api/user/{id}?model=name   -> geo data for a LightGCN user (optional model)
+    GET /api/random?model=name      -> geo data for a random user
+    GET /api/stats                  -> dataset summary
+    GET /api/explain/{id}           -> SSE stream of Mistral explanation
 """
 
 import http.server
@@ -112,42 +113,71 @@ class DeriveHandler(http.server.SimpleHTTPRequestHandler):
         else:
             super().do_GET()
 
+    def _parse_path(self):
+        """Split self.path into path and query params."""
+        from urllib.parse import urlparse, parse_qs
+        parsed = urlparse(self.path)
+        params = parse_qs(parsed.query)
+        # Flatten single-value params
+        flat = {k: v[0] for k, v in params.items()}
+        return parsed.path, flat
+
     def _handle_api(self):
         gd = self.gowalla_data
+        path, params = self._parse_path()
+        model = params.get("model")
 
-        if self.path.startswith("/api/explain/"):
+        if path.startswith("/api/explain/"):
             try:
-                uid = int(self.path.split("/")[-1])
+                uid = int(path.split("/")[-1])
             except ValueError:
                 return self._json(400, {"error": "Invalid user ID"})
-            data = gd.get_user_geo(uid)
+            data = gd.get_user_geo(uid, model=model)
             if data is None:
                 return self._json(404, {"error": f"User {uid} not found"})
             if not data.get("predictions"):
                 return self._json(400, {"error": "No predictions available for this user. Run inference first."})
             return self._stream_explain(uid, data)
 
-        elif self.path.startswith("/api/user/"):
+        elif path.startswith("/api/user/"):
             try:
-                uid = int(self.path.split("/")[-1])
+                uid = int(path.split("/")[-1])
             except ValueError:
                 return self._json(400, {"error": "Invalid user ID"})
-            data = gd.get_user_geo(uid)
+            data = gd.get_user_geo(uid, model=model)
             if data is None:
                 return self._json(404, {"error": f"User {uid} not found"})
             return self._json(200, data)
 
-        elif self.path == "/api/random":
+        elif path == "/api/random":
             uid = random.choice(list(gd.train_dict.keys()))
-            data = gd.get_user_geo(uid)
+            data = gd.get_user_geo(uid, model=model)
             return self._json(200, {"uid": uid, **(data or {})})
 
-        elif self.path == "/api/stats":
+        elif path == "/api/models":
+            models = []
+            for name in gd.available_models:
+                meta = gd.prediction_meta.get(name, {})
+                models.append({
+                    "name": name,
+                    "embed_dim": meta.get("embed_dim"),
+                    "n_layers": meta.get("n_layers"),
+                    "lr": meta.get("lr"),
+                    "reg_weight": meta.get("reg_weight"),
+                    "val_recall_at_20": meta.get("val_recall_at_20"),
+                    "val_ndcg_at_20": meta.get("val_ndcg_at_20"),
+                    "is_default": name == gd.default_model,
+                })
+            return self._json(200, {"models": models, "default": gd.default_model})
+
+        elif path == "/api/stats":
             return self._json(
                 200,
                 {
                     "n_users": gd.n_users,
                     "n_items": gd.n_items,
+                    "n_models": len(gd.available_models),
+                    "default_model": gd.default_model,
                     "user_id_range": [0, max(gd.train_dict.keys())],
                 },
             )

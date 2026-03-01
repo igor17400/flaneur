@@ -16,6 +16,7 @@ load_dotenv()
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_DIR = PROJECT_ROOT / "prompts"
 CHECKPOINT_DIR = PROJECT_ROOT / "checkpoints"
+PREDICTIONS_DIR = PROJECT_ROOT / "predictions"
 console = Console()
 
 TOPK = 20
@@ -163,6 +164,148 @@ class LightGCNModel(weave.Model):
         }
 
 
+# ---------------------------------------------------------------------------
+# Weave Model: PredictionModel — loads pre-computed predictions from JSON
+# ---------------------------------------------------------------------------
+
+
+class PredictionModel(weave.Model):
+    """Pre-computed predictions model — looks up results from infer.py JSON files."""
+
+    # Model config (mirrors LightGCNModel for Weave leaderboard comparison)
+    embed_dim: int
+    n_layers: int
+    embed_dropout: float
+
+    # Training config
+    lr: float
+    reg_weight: float
+    batch_size: int
+    epochs: int
+    n_negatives: int
+
+    # Validation metrics
+    val_recall_at_20: float
+    val_ndcg_at_20: float
+
+    # Source
+    prediction_source: str
+
+    # Runtime state
+    _predictions: dict = {}
+    _train_dict: dict = {}
+    _test_dict: dict = {}
+    _item_popularity: np.ndarray = None
+    _item_embed: np.ndarray = None
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    @classmethod
+    def from_prediction_file(cls, pred_path: Path, checkpoint_dir: Path | None = None) -> "PredictionModel":
+        """Load a model from a predictions JSON file.
+
+        Args:
+            pred_path: Path to predictions/*.json
+            checkpoint_dir: Optional checkpoint dir for test_dict/train_dict/item_embed.
+                           If None, searches for any available checkpoint.
+        """
+        with open(pred_path) as f:
+            data = json.load(f)
+
+        pred_name = pred_path.stem
+
+        # Build predictions lookup: {int(uid) → {items, scores}}
+        predictions = {}
+        for uid_str, entry in data["users"].items():
+            predictions[int(uid_str)] = {
+                "items": entry["items"],
+                "scores": entry["scores"],
+            }
+
+        model = cls(
+            embed_dim=data.get("embed_dim") or 64,
+            n_layers=data.get("n_layers") or 4,
+            embed_dropout=0.0,
+            lr=data.get("lr") or 0.0,
+            reg_weight=data.get("reg_weight") or 0.0,
+            batch_size=0,
+            epochs=data.get("epochs") or 0,
+            n_negatives=data.get("n_negatives") or 0,
+            val_recall_at_20=data.get("val_recall_at_20") or 0.0,
+            val_ndcg_at_20=data.get("val_ndcg_at_20") or 0.0,
+            prediction_source=pred_name,
+        )
+        model._predictions = predictions
+
+        # Load supplementary data from a checkpoint
+        ckpt_dir = checkpoint_dir
+        if ckpt_dir is None:
+            # Try matching checkpoint first, then fall back to any available
+            matching = CHECKPOINT_DIR / pred_name
+            if matching.exists() and (matching / "metadata.json").exists():
+                ckpt_dir = matching
+            else:
+                available = [
+                    d for d in sorted(CHECKPOINT_DIR.iterdir())
+                    if d.is_dir() and (d / "metadata.json").exists()
+                ]
+                if available:
+                    ckpt_dir = available[0]
+
+        if ckpt_dir and (ckpt_dir / "metadata.json").exists():
+            with open(ckpt_dir / "metadata.json") as f:
+                meta = json.load(f)
+            model._train_dict = {int(k): v for k, v in meta["train_dict"].items()}
+            model._test_dict = {int(k): v for k, v in meta["test_dict"].items()}
+
+            # Item popularity from train_dict
+            n_items = data.get("n_items", 0)
+            if n_items > 0:
+                item_popularity = np.zeros(n_items, dtype=np.int32)
+                for items in model._train_dict.values():
+                    for item in items:
+                        if item < n_items:
+                            item_popularity[item] += 1
+                model._item_popularity = item_popularity
+
+            # Item embeddings: only from matching checkpoint
+            matching_ckpt = CHECKPOINT_DIR / pred_name
+            if matching_ckpt.exists() and (matching_ckpt / "embeddings.npz").exists():
+                emb_data = np.load(matching_ckpt / "embeddings.npz")
+                n_users = int(emb_data["n_users"])
+                n_items_emb = int(emb_data["n_items"])
+                model._item_embed = emb_data["all_embed"][n_users : n_users + n_items_emb]
+            else:
+                model._item_embed = None
+
+            console.print(
+                f"[bold]Loaded predictions:[/bold] {pred_name} — "
+                f"{len(predictions)} users, embed_dim={model.embed_dim}, "
+                f"supplementary data from {ckpt_dir.name}"
+                + (" (no item embeddings — diversity will be skipped)" if model._item_embed is None else "")
+            )
+        else:
+            console.print(
+                f"[bold]Loaded predictions:[/bold] {pred_name} — "
+                f"{len(predictions)} users, embed_dim={model.embed_dim} "
+                f"[yellow](no checkpoint found — limited scorers)[/yellow]"
+            )
+
+        return model
+
+    @weave.op
+    def predict(self, user_id: int) -> dict:
+        """Look up pre-computed recommendations for a user."""
+        entry = self._predictions.get(user_id)
+        if entry is None:
+            return {"user_id": user_id, "recommendations": [], "scores": []}
+        return {
+            "user_id": user_id,
+            "recommendations": entry["items"],
+            "scores": entry["scores"],
+        }
+
+
 @weave.op
 def recall_scorer(user_id: int, output: dict) -> dict:
     """Recall@K: fraction of test items found in top-K."""
@@ -198,7 +341,11 @@ def ndcg_scorer(user_id: int, output: dict) -> dict:
 @weave.op
 def diversity_scorer(output: dict) -> dict:
     """Intra-list diversity: 1 - avg pairwise cosine similarity."""
+    if _active_model._item_embed is None:
+        return {"diversity": None}
     recs = output["recommendations"]
+    if not recs:
+        return {"diversity": None}
     embeds = _active_model._item_embed[recs]
     norms = np.linalg.norm(embeds, axis=1, keepdims=True)
     embeds_norm = embeds / np.maximum(norms, 1e-8)
@@ -213,7 +360,11 @@ def diversity_scorer(output: dict) -> dict:
 @weave.op
 def coverage_scorer(output: dict) -> dict:
     """Per-user item popularity stats (cold items vs popular)."""
+    if _active_model._item_popularity is None:
+        return {"avg_item_popularity": None, "min_item_popularity": None, "cold_items_recommended": None}
     recs = output["recommendations"]
+    if not recs:
+        return {"avg_item_popularity": None, "min_item_popularity": None, "cold_items_recommended": None}
     pops = _active_model._item_popularity[recs]
     return {
         "avg_item_popularity": float(np.mean(pops)),
@@ -223,7 +374,7 @@ def coverage_scorer(output: dict) -> dict:
 
 
 # Global reference to the active model (set before evaluation)
-_active_model: LightGCNModel = None
+_active_model: LightGCNModel | PredictionModel = None
 
 
 # ---------------------------------------------------------------------------
@@ -241,12 +392,40 @@ _active_model: LightGCNModel = None
 # ---------------------------------------------------------------------------
 
 
-async def run_evaluation(checkpoint_path: Path, n_users: int = 200, user_ids: list[int] | None = None):
-    """Run the full Weave evaluation pipeline."""
+def _human_model_name(model) -> str:
+    """Build a short, readable name like 'LightGCN-d256-L4-reg1e-05' or 'raw-untrained'."""
+    if isinstance(model, PredictionModel):
+        src = model.prediction_source
+        if "raw" in src or "untrained" in src:
+            return "raw-untrained"
+    # Format reg_weight compactly: 1e-05, 0.001, etc.
+    reg = getattr(model, "reg_weight", 0)
+    if reg and reg > 0:
+        reg_str = f"{reg:.0e}".replace("+", "").replace("0", "").rstrip("e")
+        # Clean up: "1e-05" → "1e-5", "1e-04" → "1e-4"
+        reg_str = f"-reg{reg:.0e}"
+    else:
+        reg_str = ""
+    return f"LightGCN-d{model.embed_dim}-L{model.n_layers}{reg_str}"
+
+
+async def run_evaluation(
+    checkpoint_path: Path | None = None,
+    n_users: int = 200,
+    user_ids: list[int] | None = None,
+    model: weave.Model | None = None,
+    eval_label: str | None = None,
+):
+    """Run the full Weave evaluation pipeline.
+
+    Provide either checkpoint_path (loads LightGCNModel) or a pre-built model.
+    eval_label overrides the auto-generated evaluation name.
+    """
     global _active_model
 
     weave.init("flaneur")
-    model = LightGCNModel.from_checkpoint(str(checkpoint_path))
+    if model is None:
+        model = LightGCNModel.from_checkpoint(str(checkpoint_path))
     _active_model = model
 
     if user_ids is not None:
@@ -263,10 +442,18 @@ async def run_evaluation(checkpoint_path: Path, n_users: int = 200, user_ids: li
     dataset = [{"user_id": uid} for uid in test_users]
     console.print(f"Running evaluation on [bold]{len(dataset)}[/bold] test users...")
 
+    if eval_label:
+        eval_name = eval_label
+    else:
+        model_name = _human_model_name(model)
+        n = len(dataset)
+        eval_name = f"{model_name} ({n} users)"
+
     evaluation = weave.Evaluation(
         dataset=dataset,
         scorers=[recall_scorer, ndcg_scorer, diversity_scorer, coverage_scorer],
-        name=f"eval_{checkpoint_path.name}",
+        name=eval_name,
+        evaluation_name=eval_name,
     )
 
     results = await evaluation.evaluate(model)
@@ -368,6 +555,15 @@ def main():
         help="Number of test users to evaluate",
     )
     parser.add_argument(
+        "--from-predictions",
+        type=str,
+        nargs="*",
+        default=None,
+        metavar="NAME",
+        help="Evaluate pre-computed prediction files from predictions/*.json. "
+             "Use as bare flag with --ab-test to load predictions by ab-test names.",
+    )
+    parser.add_argument(
         "--list",
         action="store_true",
         help="List available checkpoints and exit",
@@ -376,6 +572,99 @@ def main():
 
     if args.list:
         list_checkpoints()
+        return
+
+    # --from-predictions mode (list is non-None when flag is present, even if empty)
+    if args.from_predictions is not None:
+        pred_names = args.from_predictions
+
+        if args.ab_test:
+            # A/B test with prediction files — use ab-test names if --from-predictions is bare
+            if not pred_names:
+                pred_names = args.ab_test
+            if len(pred_names) != 2:
+                console.print("[red]A/B test with --from-predictions requires exactly 2 names.[/red]")
+                raise SystemExit(1)
+
+            console.print(f"\n[bold magenta]{'='*60}[/bold magenta]")
+            console.print(f"[bold magenta]A/B Test (from predictions)[/bold magenta]")
+            console.print(f"[bold magenta]{'='*60}[/bold magenta]")
+            console.print(f"  Group A: {pred_names[0]}")
+            console.print(f"  Group B: {pred_names[1]}")
+            console.print(f"  Users per group: {args.n_users}")
+            console.print()
+
+            # Load both models to get test users
+            models = []
+            for name in pred_names:
+                pred_path = PREDICTIONS_DIR / f"{name}.json"
+                if not pred_path.exists():
+                    console.print(f"[red]Prediction file not found: {pred_path}[/red]")
+                    raise SystemExit(1)
+                models.append(PredictionModel.from_prediction_file(pred_path))
+
+            # Get test users from the first model (shared dataset)
+            all_test_users = sorted(
+                uid for uid in models[0]._test_dict if models[0]._test_dict[uid]
+            )
+
+            total_needed = args.n_users * 2
+            rng = np.random.default_rng(42)
+            if total_needed <= len(all_test_users):
+                sampled_indices = rng.choice(len(all_test_users), size=total_needed, replace=False)
+                sampled_indices.sort()
+                sampled_users = [all_test_users[i] for i in sampled_indices]
+            else:
+                sampled_users = all_test_users
+
+            mid = len(sampled_users) // 2
+            group_a_users = sampled_users[:mid]
+            group_b_users = sampled_users[mid:]
+
+            console.print(f"  Group A users: {len(group_a_users)}")
+            console.print(f"  Group B users: {len(group_b_users)}")
+            console.print()
+
+            console.print(f"[bold cyan]{'='*60}[/bold cyan]")
+            console.print(f"[bold cyan]Group A → {pred_names[0]}[/bold cyan]")
+            console.print(f"[bold cyan]{'='*60}[/bold cyan]")
+            name_a = _human_model_name(models[0])
+            name_b = _human_model_name(models[1])
+            asyncio.run(run_evaluation(
+                model=models[0], n_users=args.n_users, user_ids=group_a_users,
+                eval_label=f"A/B Group A: {name_a} ({len(group_a_users)} users)",
+            ))
+
+            console.print(f"\n[bold cyan]{'='*60}[/bold cyan]")
+            console.print(f"[bold cyan]Group B → {pred_names[1]}[/bold cyan]")
+            console.print(f"[bold cyan]{'='*60}[/bold cyan]")
+            asyncio.run(run_evaluation(
+                model=models[1], n_users=args.n_users, user_ids=group_b_users,
+                eval_label=f"A/B Group B: {name_b} ({len(group_b_users)} users)",
+            ))
+
+            console.print(f"\n[bold green]A/B test complete![/bold green]")
+            return
+
+        # Standard --from-predictions: evaluate each prediction file
+        if not pred_names:
+            console.print("[red]--from-predictions requires at least one prediction name.[/red]")
+            raise SystemExit(1)
+        for name in pred_names:
+            pred_path = PREDICTIONS_DIR / f"{name}.json"
+            if not pred_path.exists():
+                console.print(f"[red]Prediction file not found: {pred_path}[/red]")
+                raise SystemExit(1)
+
+            console.print(f"\n[bold cyan]{'='*60}[/bold cyan]")
+            console.print(f"[bold cyan]Evaluating predictions: {name}[/bold cyan]")
+            console.print(f"[bold cyan]{'='*60}[/bold cyan]")
+            pred_model = PredictionModel.from_prediction_file(pred_path)
+            asyncio.run(run_evaluation(model=pred_model, n_users=args.n_users))
+
+        if len(pred_names) > 1:
+            console.print(f"\n[bold green]All {len(pred_names)} prediction files evaluated![/bold green]")
+            console.print("[bold]Compare them in the Weave leaderboard.[/bold]")
         return
 
     if args.ab_test:
@@ -425,13 +714,19 @@ def main():
         console.print(f"[bold cyan]{'='*60}[/bold cyan]")
         console.print(f"[bold cyan]Group A → Model: {args.ab_test[0]}[/bold cyan]")
         console.print(f"[bold cyan]{'='*60}[/bold cyan]")
-        asyncio.run(run_evaluation(path_a, args.n_users, user_ids=group_a_users))
+        asyncio.run(run_evaluation(
+            path_a, args.n_users, user_ids=group_a_users,
+            eval_label=f"A/B Group A: {args.ab_test[0]} ({len(group_a_users)} users)",
+        ))
 
         # Evaluate Group B with Model B
         console.print(f"\n[bold cyan]{'='*60}[/bold cyan]")
         console.print(f"[bold cyan]Group B → Model: {args.ab_test[1]}[/bold cyan]")
         console.print(f"[bold cyan]{'='*60}[/bold cyan]")
-        asyncio.run(run_evaluation(path_b, args.n_users, user_ids=group_b_users))
+        asyncio.run(run_evaluation(
+            path_b, args.n_users, user_ids=group_b_users,
+            eval_label=f"A/B Group B: {args.ab_test[1]} ({len(group_b_users)} users)",
+        ))
 
         console.print(f"\n[bold green]A/B test complete![/bold green]")
         console.print("[bold]Compare groups in the Weave leaderboard — each group has different users, simulating real traffic splitting.[/bold]")

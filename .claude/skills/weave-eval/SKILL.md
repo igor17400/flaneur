@@ -15,32 +15,45 @@ Lightweight Weave eval that runs **after any training run** — not just at the 
 - Before deciding what to ablate or improve next
 - Any time you want test-set signals without the overhead of `/eval-report`
 
-## Step 1: Identify the Checkpoint
+## Default: A/B test the two best trained models
 
-List available checkpoints:
+The default invocation is an **A/B test comparing the two best trained checkpoints** on randomly assigned, non-overlapping user groups — simulating a real production traffic split where each user only sees one model.
+
+### Step 1: Identify the two best checkpoints
+
+List checkpoints sorted by val recall:
 
 ```bash
 uv run python src/evaluate_weave.py --list
 ```
 
-Pick the most recent one, or the one matching the run you want to evaluate.
+Pick the **top 2 by Val Recall@20** that differ meaningfully (e.g. different embed_dim, different reg_weight). If the top two are nearly identical configs, pick the best and the next-best with a **different architecture** (e.g. d256 vs d128) for a more informative comparison.
 
-## Step 2: Run Fast Evaluation
-
-Run Weave eval with a small user sample (100-200) and **no Mistral reflection** for speed:
+### Step 2: Ensure prediction files exist for both
 
 ```bash
-# Fast eval: 100 users, ~2 min
-uv run python src/evaluate_weave.py --run lgcn_gowalla_full --n_users 100
+ls predictions/
 ```
 
-**Note:** The script always runs Mistral reflection at the end. To skip it for speed, you can set `MISTRAL_API_KEY` to empty — the reflection will fail gracefully and the core metrics still get logged to Weave.
+If either prediction file is missing, generate it:
 
-For ablation comparison, run eval on each checkpoint sequentially. Each run is traced separately in Weave and updates the leaderboard.
+```bash
+uv run python src/infer.py --run <checkpoint_name>
+```
 
-## Step 3: Read the Results
+### Step 3: Run A/B test
 
-The evaluation prints a JSON summary with these metrics:
+Randomly assign 200 users to each group, each group sees only one model:
+
+```bash
+uv run python src/evaluate_weave.py --ab-test <model_a> <model_b> --from-predictions --n_users 200
+```
+
+This samples 400 users total (seed=42), splits into two non-overlapping groups of 200, and evaluates each model on its own group — just like real traffic splitting.
+
+### Step 4: Read the results
+
+The evaluation prints a JSON summary for each group with these metrics:
 
 | Metric | What it tells you |
 |--------|-------------------|
@@ -50,32 +63,47 @@ The evaluation prints a JSON summary with these metrics:
 | `coverage_scorer.avg_item_popularity.mean` | Whether model recommends popular or niche items |
 | `coverage_scorer.cold_items_recommended.mean` | How many cold-start items appear in recs |
 
-## Step 4: Compare in Weave UI
+### Step 5: Report findings
 
-All evaluations are logged to the Weave project `flaneur`. You can:
+Present a comparison table and recommend which model to deploy:
 
-1. **Leaderboard tab** — side-by-side comparison of all evaluated checkpoints
+```
+| Group | Model                     | Recall@20 | NDCG@20 | Diversity | Avg Popularity |
+|-------|---------------------------|-----------|---------|-----------|----------------|
+| A     | LightGCN-d256-L4-reg1e-05 | ...       | ...     | ...       | ...            |
+| B     | LightGCN-d128-L4-reg1e-05 | ...       | ...     | ...       | ...            |
+```
+
+## Alternative modes
+
+```bash
+# Compare on SAME users (controlled, not A/B)
+uv run python src/evaluate_weave.py --from-predictions <name1> <name2> --n_users 200
+
+# Single model evaluation
+uv run python src/evaluate_weave.py --from-predictions <name> --n_users 200
+
+# From checkpoint directly (recomputes predictions)
+uv run python src/evaluate_weave.py --run <checkpoint_name> --n_users 100
+```
+
+## Trace naming
+
+Traces in Weave UI use human-readable names including the distinguishing config:
+- `LightGCN-d256-L4-reg1e-05 (200 users)`
+- `A/B Group A: LightGCN-d256-L4-reg1e-05 (200 users)`
+- `A/B Group B: LightGCN-d128-L4-reg1e-05 (200 users)`
+
+## Compare in Weave UI
+
+All evaluations are logged to the Weave project `flaneur`:
+
+1. **Leaderboard tab** — side-by-side comparison of all evaluated models
 2. **Traces tab** — drill into individual user recommendations
-3. **Filter by eval name** — each eval is named `eval_{checkpoint_name}`
-
-## Step 5: Report Findings
-
-Present a comparison table to guide the next decision:
-
-```
-| Config          | Val Recall@20 | Test Recall@20 | Diversity | Coverage |
-|-----------------|---------------|----------------|-----------|----------|
-| embed_dim=64    | 0.1417        | ...            | ...       | ...      |
-| embed_dim=128   | 0.1528        | ...            | ...       | ...      |
-| embed_dim=256   | ...           | ...            | ...       | ...      |
-```
-
-Key insight: Val metrics only measure recall/NDCG. Weave eval adds **diversity and coverage**, which may reveal that the "best" config by recall actually recommends a narrow set of popular items.
+3. **Filter by eval name** — each eval has a descriptive name
 
 ## Workflow Position
 
 ```
 Train → /weave-eval → /analyze-run → /improve-model or /ablation → Train → ...
 ```
-
-This skill sits between training and analysis, enriching the signal available to `/analyze-run` with test-set quality metrics.

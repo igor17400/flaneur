@@ -2,11 +2,11 @@
 gowalla.py — Loads and maps LightGCN ↔ SNAP Gowalla data.
 
 Provides the bridge between LightGCN's remapped integer IDs and the original
-SNAP dataset with lat/lon coordinates.
+SNAP dataset with lat/lon coordinates. Supports multiple prediction models.
 
 Usage:
     gowalla = GowallaData("path/to/data")
-    user_geo = gowalla.get_user_geo(uid=42)
+    user_geo = gowalla.get_user_geo(uid=42, model="dim256_layers4_...")
 """
 
 import json
@@ -25,8 +25,12 @@ class GowallaData:
     user_timelines: dict[int, dict[int, str]]
     train_dict: dict[int, list[int]]
     test_dict: dict[int, list[int]]
-    predictions: dict[int, list[int]]  # user_id → [item_id, ...]
-    prediction_meta: dict  # model info (name, embed_dim, etc.)
+    # model_name → {uid → [item_id, ...]}
+    predictions: dict[str, dict[int, list[int]]]
+    # model_name → metadata dict
+    prediction_meta: dict[str, dict]
+    # which model to use by default (best recall, or most recent)
+    default_model: str | None = None
 
     @property
     def n_users(self) -> int:
@@ -36,7 +40,11 @@ class GowallaData:
     def n_items(self) -> int:
         return len(self.item_remap_to_org)
 
-    def get_user_geo(self, uid: int) -> dict | None:
+    @property
+    def available_models(self) -> list[str]:
+        return sorted(self.predictions.keys())
+
+    def get_user_geo(self, uid: int, model: str | None = None) -> dict | None:
         """Build geographic data for a single LightGCN user ID."""
         org_uid = self.user_remap_to_org.get(uid)
         if org_uid is None:
@@ -81,8 +89,12 @@ class GowallaData:
         else:
             label = "Neighborhood Local"
 
-        # Model predictions (if available for this user)
-        pred_items = self.predictions.get(uid, [])
+        # Resolve which model to use
+        model_name = model or self.default_model
+        model_preds = self.predictions.get(model_name, {}) if model_name else {}
+        model_meta = self.prediction_meta.get(model_name, {}) if model_name else {}
+
+        pred_items = model_preds.get(uid, [])
         predictions = []
         for iid in pred_items:
             org_loc = self.item_remap_to_org.get(iid)
@@ -101,7 +113,7 @@ class GowallaData:
             "history": history,
             "ground_truth": ground_truth,
             "predictions": predictions,
-            "prediction_model": self.prediction_meta.get("model", None),
+            "prediction_model": model_name,
             "spread": round(spread, 2),
         }
 
@@ -163,22 +175,46 @@ def load(data_dir: str | Path) -> GowallaData:
     train_dict = _parse_split(data_dir / "gowalla/train.txt")
     test_dict = _parse_split(data_dir / "gowalla/test.txt")
 
-    # Model predictions (optional)
-    predictions: dict[int, list[int]] = {}
-    prediction_meta: dict = {}
-    pred_path = data_dir / "predictions.json"
-    if pred_path.exists():
-        print("  Loading model predictions...")
-        with open(pred_path) as f:
-            pred_data = json.load(f)
-        prediction_meta = {
-            k: v for k, v in pred_data.items() if k != "users"
-        }
-        for uid_str, info in pred_data.get("users", {}).items():
-            predictions[int(uid_str)] = info["items"]
-        print(f"  Predictions loaded for {len(predictions)} users ({prediction_meta.get('model', '?')} model)")
+    # Model predictions — load ALL files from predictions/ directory
+    all_predictions: dict[str, dict[int, list[int]]] = {}
+    all_prediction_meta: dict[str, dict] = {}
+    default_model: str | None = None
+    best_recall = -1.0
+
+    pred_dir = data_dir.parent / "predictions"
+    if pred_dir.is_dir():
+        pred_files = sorted(pred_dir.glob("*.json"))
+        if pred_files:
+            print(f"  Loading {len(pred_files)} prediction file(s)...")
+            for pred_path in pred_files:
+                with open(pred_path) as f:
+                    pred_data = json.load(f)
+                model_name = pred_data.get("model", pred_path.stem)
+                meta = {k: v for k, v in pred_data.items() if k != "users"}
+                preds = {}
+                for uid_str, info in pred_data.get("users", {}).items():
+                    preds[int(uid_str)] = info["items"]
+                all_predictions[model_name] = preds
+                all_prediction_meta[model_name] = meta
+
+                # Track best model by recall for default
+                recall = meta.get("val_recall_at_20")
+                if recall is not None and recall > best_recall:
+                    best_recall = recall
+                    default_model = model_name
+
+                print(f"    {model_name}: {len(preds)} users, recall@20={recall}")
+
+            # If no model had recall (e.g. all raw), use the first non-raw model
+            if default_model is None:
+                non_raw = [m for m in all_predictions if m != "raw_untrained"]
+                default_model = non_raw[0] if non_raw else list(all_predictions.keys())[0]
+
+            print(f"  Default model: {default_model}")
+        else:
+            print("  No prediction files found in predictions/ — run src/infer.py to generate")
     else:
-        print("  No predictions.json found — run src/infer.py to generate")
+        print("  No predictions/ directory found — run src/infer.py to generate")
 
     print(f"  Ready: {len(train_dict)} users, {len(item_remap_to_org)} items, {len(loc_coords)} locations")
 
@@ -189,8 +225,9 @@ def load(data_dir: str | Path) -> GowallaData:
         user_timelines=dict(user_timelines),
         train_dict=train_dict,
         test_dict=test_dict,
-        predictions=predictions,
-        prediction_meta=prediction_meta,
+        predictions=all_predictions,
+        prediction_meta=all_prediction_meta,
+        default_model=default_model,
     )
 
 
