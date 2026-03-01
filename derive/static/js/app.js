@@ -1,9 +1,10 @@
 /**
  * app.js — Main application controller. Wires map, timeline, and animation together.
- * Supports switching between multiple prediction models.
+ * Supports switching between multiple prediction models and agentic chat.
  *
  * Exports (via window.deriveApp):
  *   selectUser(uid) – load and display a user
+ *   loadAndSelectUser(uid) – fetch and display a user
  */
 
 (function () {
@@ -178,13 +179,14 @@
   function selectUser(uid) {
     if (deriveAnimation.isAnimating()) deriveAnimation.toggle(userData, currentUser, renderMapLayers);
 
-    // Close explain panel when switching users
-    if (deriveExplain.isOpen()) deriveExplain.close();
-
     currentUser = uid;
     highlightedIdx = -1;
     const data = userData[uid];
     if (!data) return;
+
+    // Update chat panel's user label if open (don't close it)
+    const chatUser = document.getElementById('chat-user');
+    if (chatUser) chatUser.textContent = `User #${uid}`;
 
     deriveTimeline.renderRecentChips(recentUsers, currentUser, userData);
     deriveTimeline.renderTimeline(data);
@@ -221,6 +223,14 @@
     document.getElementById('progress').classList.remove('visible');
     // Clear any active comparison row highlight
     document.querySelectorAll('.compare-row.active').forEach((el) => el.classList.remove('active'));
+    // Turn off all heatmaps if active
+    if (deriveMap.isHeatmapActive()) {
+      deriveMap.clearAllHeatmaps();
+      Object.values(HEATMAP_BUTTON_IDS).forEach(id => {
+        const b = document.getElementById(id);
+        if (b) b.classList.remove('active');
+      });
+    }
     rerenderMap();
   }
 
@@ -240,28 +250,79 @@
     randomUser();
   });
 
-  // ── Explain panel ──────────────────────────────────────────────────────
+  // ── Chat panel ─────────────────────────────────────────────────────────
   function explainUser() {
     if (currentUser == null) return;
-    const data = userData[currentUser];
-    if (!data || !data.predictions || data.predictions.length === 0) {
-      deriveExplain.showNoPredictions(currentUser);
-      return;
-    }
-    deriveExplain.open(currentUser);
+    deriveChat.open(currentUser);
   }
 
-  function closeExplainPanel() {
-    deriveExplain.close();
+  function closeChatPanel() {
+    deriveChat.close();
+  }
+
+  // ── Report (direct button) ────────────────────────────────────────────
+  async function openReport() {
+    if (currentUser == null) return;
+    try {
+      const res = await fetch(`/api/report/${currentUser}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      deriveReport.open(data);
+    } catch (e) {
+      console.error('Failed to load report:', e);
+    }
+  }
+
+  // ── Leaderboard ───────────────────────────────────────────────────────
+  function openLeaderboard() {
+    deriveLeaderboard.open();
+  }
+
+  // ── Compare ───────────────────────────────────────────────────────────
+  function openCompare() {
+    if (currentUser == null) return;
+    deriveCompare.open(currentUser);
+  }
+
+  // ── Per-category heatmaps ────────────────────────────────────────────
+  const HEATMAP_BUTTON_IDS = {
+    history: 'btn-heatmap-history',
+    ground_truth: 'btn-heatmap-gt',
+    predictions: 'btn-heatmap-pred',
+  };
+
+  function toggleCategoryHeatmap(category) {
+    const btn = document.getElementById(HEATMAP_BUTTON_IDS[category]);
+    if (!btn) return;
+    const data = userData[currentUser];
+    if (!data) return;
+
+    // Toggle off
+    if (btn.classList.contains('active')) {
+      deriveMap.clearCategoryHeatmap(category);
+      btn.classList.remove('active');
+      return;
+    }
+
+    // Toggle on — get the right point array
+    const points = data[category] || [];
+    if (!points.length) return;
+
+    deriveMap.renderCategoryHeatmap(category, points);
+    btn.classList.add('active');
   }
 
   // Expose globals for HTML onclick handlers
-  window.deriveApp = { selectUser };
+  window.deriveApp = { selectUser, loadAndSelectUser };
   window.searchUser = searchUser;
   window.randomUser = randomUser;
   window.showAll = showAll;
   window.fitBounds = fitBounds;
   window.toggleAnimation = toggleAnimation;
   window.explainUser = explainUser;
-  window.closeExplainPanel = closeExplainPanel;
+  window.closeChatPanel = closeChatPanel;
+  window.openReport = openReport;
+  window.openLeaderboard = openLeaderboard;
+  window.openCompare = openCompare;
+  window.toggleCategoryHeatmap = toggleCategoryHeatmap;
 })();

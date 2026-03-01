@@ -10,6 +10,11 @@
   <link  href="https://unpkg.com/maplibre-gl@4.1.2/dist/maplibre-gl.css" rel="stylesheet" />
   <script src="https://unpkg.com/deck.gl@9.0.16/dist.min.js"></script>
 
+  <!-- Chart.js, html2canvas, jsPDF -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
+
   <!-- App styles -->
   <link rel="stylesheet" href="/static/css/style.css" />
 </head>
@@ -33,11 +38,10 @@
     <div class="search-error" id="search-error"></div>
   </div>
 
+  <!-- Model selector -->
   <div class="section-hdr">Model</div>
   <div class="model-selector">
-    <select id="model-select">
-      <option value="">Loading models...</option>
-    </select>
+    <select id="model-select"></select>
     <div class="model-info" id="model-info"></div>
   </div>
 
@@ -93,22 +97,32 @@
   <button class="btn" id="btn-animate" onclick="toggleAnimation()">Animate</button>
   <button class="btn" onclick="showAll()">Show All</button>
   <button class="btn" onclick="fitBounds()">Fit View</button>
+  <button class="btn btn-report" onclick="openReport()">Report</button>
+  <button class="btn btn-compare" onclick="openCompare()">Compare</button>
+  <button class="btn btn-heatmap-history" id="btn-heatmap-history" onclick="toggleCategoryHeatmap('history')">Heat: History</button>
+  <button class="btn btn-heatmap-gt" id="btn-heatmap-gt" onclick="toggleCategoryHeatmap('ground_truth')">Heat: Truth</button>
+  <button class="btn btn-heatmap-pred" id="btn-heatmap-pred" onclick="toggleCategoryHeatmap('predictions')">Heat: Preds</button>
+  <button class="btn btn-leaderboard" onclick="openLeaderboard()">Leaderboard</button>
   <button class="btn btn-explain" onclick="explainUser()">Explain</button>
 </div>
 
-<!-- ── Explain Panel (right drawer) ────────────────────── -->
-<div id="explain-panel" class="explain-panel">
-  <div class="explain-header">
-    <div class="explain-title">
-      <span class="explain-icon">&#x2728;</span>
-      <span id="explain-user">User</span>
+<!-- ── Chat Panel (right drawer) ──────────────────────── -->
+<div id="chat-panel" class="chat-panel">
+  <div class="chat-header">
+    <div class="chat-title">
+      <span class="chat-icon">&#x2728;</span>
+      <span id="chat-user">User</span>
     </div>
-    <button class="explain-close" onclick="closeExplainPanel()">&times;</button>
+    <button class="chat-close" onclick="closeChatPanel()">&times;</button>
   </div>
-  <div class="explain-body" id="explain-body"></div>
-  <div class="explain-footer">
-    <span class="explain-model">mistral-medium-latest</span>
-    <span id="explain-status" class="explain-status">idle</span>
+  <div class="chat-messages" id="chat-messages"></div>
+  <div class="chat-input-row">
+    <input type="text" id="chat-input" placeholder="Ask about this user..." autocomplete="off" />
+    <button id="chat-send" class="chat-send-btn">Send</button>
+  </div>
+  <div class="chat-footer">
+    <span class="chat-model">mistral-medium-latest</span>
+    <span id="chat-status" class="chat-status">idle</span>
   </div>
 </div>
 
@@ -120,11 +134,54 @@
   </div>
 </div>
 
+<!-- ── Leaderboard Overlay ────────────────────────────── -->
+<div id="leaderboard-overlay" class="report-overlay">
+  <div class="report-container" style="max-width:700px">
+    <div class="report-topbar">
+      <div class="report-topbar-title">&#x1F3C6; Leaderboard</div>
+      <div class="report-topbar-actions">
+        <button class="report-close-btn" onclick="deriveLeaderboard.close()">&times;</button>
+      </div>
+    </div>
+    <div class="report-body" id="leaderboard-content"></div>
+  </div>
+</div>
+
+<!-- ── Compare Overlay ───────────────────────────────── -->
+<div id="compare-overlay" class="report-overlay">
+  <div class="report-container" style="max-width:900px">
+    <div class="report-topbar">
+      <div class="report-topbar-title">&#x2696; Compare Users</div>
+      <div class="report-topbar-actions">
+        <button class="report-close-btn" onclick="deriveCompare.close()">&times;</button>
+      </div>
+    </div>
+    <div class="report-body" id="compare-content"></div>
+  </div>
+</div>
+
+<!-- ── Report Overlay ─────────────────────────────────── -->
+<div id="report-overlay" class="report-overlay">
+  <div class="report-container">
+    <div class="report-topbar">
+      <div class="report-topbar-title">&#x1F4CA; Data Analyst Report</div>
+      <div class="report-topbar-actions">
+        <button id="report-export-btn" class="report-export-btn" onclick="deriveReport.exportPDF()">Export PDF</button>
+        <button class="report-close-btn" onclick="deriveReport.close()">&times;</button>
+      </div>
+    </div>
+    <div class="report-body" id="report-content"></div>
+  </div>
+</div>
+
 <!-- ── Scripts (order matters: dependencies first) ──────── -->
 <script src="/static/js/map.js"></script>
 <script src="/static/js/timeline.js"></script>
 <script src="/static/js/animation.js"></script>
-<script src="/static/js/explain.js"></script>
+<script src="/static/js/chat.js"></script>
+<script src="/static/js/report.js"></script>
+<script src="/static/js/leaderboard.js"></script>
+<script src="/static/js/compare.js"></script>
 <script src="/static/js/app.js"></script>
 
 </body>

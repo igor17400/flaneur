@@ -2,15 +2,22 @@
  * map.js — MapLibre + deck.gl initialization and layer rendering.
  *
  * Exports (via window.deriveMap):
- *   initMap()          – create MapLibre map
- *   renderLayers(...)  – update deck.gl overlay
- *   fitBounds(pts)     – fit map to array of {lat, lon}
- *   flyTo(lat, lon)    – animate to a point
+ *   initMap()                          – create MapLibre map
+ *   renderLayers(...)                  – update deck.gl overlay
+ *   fitBounds(pts)                     – fit map to array of {lat, lon}
+ *   flyTo(lat, lon)                    – animate to a point
+ *   renderCategoryHeatmap(cat, pts)    – show one category heatmap layer
+ *   clearCategoryHeatmap(cat)          – remove one category layer
+ *   clearAllHeatmaps()                 – remove all heatmap layers
+ *   isHeatmapActive()                  – whether any heatmap is on
  */
 
 (function () {
   let map = null;
   let deckgl = null;
+  let heatmapOverlay = null;
+  const heatmapCategories = new Set();   // active category names
+  const heatmapLayerData = {};           // category → points array
 
   function initMap() {
     map = new maplibregl.Map({
@@ -458,6 +465,86 @@
     fitBounds([predPt, gtPt]);
   }
 
+  // ── Per-category heatmap mode ─────────────────────────────────────────
+  const HEATMAP_COLOR_RAMPS = {
+    history: [
+      [10, 20, 60],
+      [20, 50, 120],
+      [40, 90, 180],
+      [70, 130, 220],
+      [96, 165, 250],
+      [140, 200, 255],
+    ],
+    ground_truth: [
+      [60, 30, 0],
+      [120, 60, 0],
+      [180, 100, 0],
+      [220, 140, 10],
+      [245, 158, 11],
+      [255, 200, 80],
+    ],
+    predictions: [
+      [0, 40, 30],
+      [0, 80, 60],
+      [0, 130, 90],
+      [10, 160, 110],
+      [16, 185, 129],
+      [80, 220, 170],
+    ],
+  };
+
+  function _rebuildHeatmapLayers() {
+    const layers = [];
+    for (const cat of heatmapCategories) {
+      const pts = heatmapLayerData[cat];
+      if (!pts || !pts.length) continue;
+      const data = pts.map(p => ({ position: [p.lon, p.lat], weight: 1 }));
+      layers.push(
+        new deck.HeatmapLayer({
+          id: `heatmap-${cat}`,
+          data,
+          getPosition: d => d.position,
+          getWeight: d => d.weight,
+          radiusPixels: 40,
+          intensity: 2,
+          threshold: 0.03,
+          colorRange: HEATMAP_COLOR_RAMPS[cat],
+        })
+      );
+    }
+
+    if (heatmapOverlay) {
+      heatmapOverlay.setProps({ layers });
+    } else {
+      heatmapOverlay = new deck.MapboxOverlay({ layers });
+      map.addControl(heatmapOverlay);
+    }
+  }
+
+  function renderCategoryHeatmap(category, points) {
+    heatmapLayerData[category] = points;
+    heatmapCategories.add(category);
+    _rebuildHeatmapLayers();
+  }
+
+  function clearCategoryHeatmap(category) {
+    heatmapCategories.delete(category);
+    delete heatmapLayerData[category];
+    _rebuildHeatmapLayers();
+  }
+
+  function clearAllHeatmaps() {
+    heatmapCategories.clear();
+    for (const k of Object.keys(heatmapLayerData)) delete heatmapLayerData[k];
+    if (heatmapOverlay) {
+      heatmapOverlay.setProps({ layers: [] });
+    }
+  }
+
+  function isHeatmapActive() {
+    return heatmapCategories.size > 0;
+  }
+
   // Public API
-  window.deriveMap = { initMap, renderLayers, renderComparePair, fitBounds, flyTo };
+  window.deriveMap = { initMap, renderLayers, renderComparePair, fitBounds, flyTo, renderCategoryHeatmap, clearCategoryHeatmap, clearAllHeatmaps, isHeatmapActive };
 })();
