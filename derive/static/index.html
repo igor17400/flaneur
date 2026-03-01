@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Derive — Where Will They Go Next?</title>
+
+  <!-- MapLibre + deck.gl -->
+  <script src="https://unpkg.com/maplibre-gl@4.1.2/dist/maplibre-gl.js"></script>
+  <link  href="https://unpkg.com/maplibre-gl@4.1.2/dist/maplibre-gl.css" rel="stylesheet" />
+  <script src="https://unpkg.com/deck.gl@9.0.16/dist.min.js"></script>
+
+  <!-- App styles -->
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+
+<div id="map"></div>
+
+<!-- ── Left Sidebar ──────────────────────────────────────── -->
+<div class="sidebar">
+  <div class="logo">
+    <h1>Derive</h1>
+    <p>LightGCN &middot; Gowalla</p>
+  </div>
+
+  <div class="search-box">
+    <div class="search-row">
+      <input type="text" id="search-input" placeholder="User ID (0 – 29857)" />
+      <button class="search-btn" onclick="searchUser()">Go</button>
+      <button class="search-btn" onclick="randomUser()">&#x1F3B2;</button>
+    </div>
+    <div class="search-error" id="search-error"></div>
+  </div>
+
+  <div class="section-hdr">Overview</div>
+  <div class="stats-grid">
+    <div class="stat-box">
+      <div class="val" id="stat-history" style="color:#60a5fa">&mdash;</div>
+      <div class="lbl">History</div>
+    </div>
+    <div class="stat-box">
+      <div class="val" id="stat-gt" style="color:#f59e0b">&mdash;</div>
+      <div class="lbl">Test set</div>
+    </div>
+    <div class="stat-box">
+      <div class="val" id="stat-pred" style="color:#10b981">&mdash;</div>
+      <div class="lbl">Preds</div>
+    </div>
+    <div class="stat-box">
+      <div class="val" id="stat-spread">&mdash;</div>
+      <div class="lbl">Spread</div>
+    </div>
+  </div>
+
+  <div class="section-hdr">Recent</div>
+  <div class="recent-wrap" id="recent-chips"></div>
+
+  <div class="section-hdr">Timeline</div>
+  <div class="timeline-wrap" id="timeline"></div>
+</div>
+
+<!-- ── Legend ─────────────────────────────────────────────── -->
+<div class="legend">
+  <div class="legend-item">
+    <div class="legend-dot" style="background:#60a5fa"></div>
+    History (train)
+  </div>
+  <div class="legend-item">
+    <div class="legend-dot" style="background:#f59e0b; box-shadow: 0 0 6px #f59e0b"></div>
+    Ground truth (test)
+  </div>
+  <div class="legend-item">
+    <div class="legend-dot" style="background:#10b981; box-shadow: 0 0 6px #10b981"></div>
+    Predictions (model)
+  </div>
+  <div class="legend-item">
+    <div class="legend-line" style="background: rgba(96,165,250,0.5)"></div>
+    Path
+  </div>
+</div>
+
+<!-- ── Controls ──────────────────────────────────────────── -->
+<div class="controls">
+  <button class="btn" id="btn-animate" onclick="toggleAnimation()">Animate</button>
+  <button class="btn" onclick="showAll()">Show All</button>
+  <button class="btn" onclick="fitBounds()">Fit View</button>
+  <button class="btn btn-explain" onclick="explainUser()">Explain</button>
+</div>
+
+<!-- ── Explain Panel (right drawer) ────────────────────── -->
+<div id="explain-panel" class="explain-panel">
+  <div class="explain-header">
+    <div class="explain-title">
+      <span class="explain-icon">&#x2728;</span>
+      <span id="explain-user">User</span>
+    </div>
+    <button class="explain-close" onclick="closeExplainPanel()">&times;</button>
+  </div>
+  <div class="explain-body" id="explain-body"></div>
+  <div class="explain-footer">
+    <span class="explain-model">mistral-medium-latest</span>
+    <span id="explain-status" class="explain-status">idle</span>
+  </div>
+</div>
+
+<div class="progress-container" id="progress">
+  <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+  <div class="progress-label">
+    <span id="progress-date"></span>
+    <span id="progress-count"></span>
+  </div>
+</div>
+
+<!-- ── Scripts (order matters: dependencies first) ──────── -->
+<script src="/static/js/map.js"></script>
+<script src="/static/js/timeline.js"></script>
+<script src="/static/js/animation.js"></script>
+<script src="/static/js/explain.js"></script>
+<script src="/static/js/app.js"></script>
+
+</body>
+</html>
