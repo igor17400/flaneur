@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 SNAP_CHECKINS_URL = "https://snap.stanford.edu/data/loc-gowalla_totalCheckins.txt.gz"
+LIGHTGCN_DATA_URL = "https://raw.githubusercontent.com/gusye1234/LightGCN-PyTorch/master/data/gowalla/"
 
 
 @dataclass
@@ -137,6 +138,16 @@ def load(data_dir: str | Path) -> GowallaData:
             └── loc-gowalla_totalCheckins.txt
     """
     data_dir = Path(data_dir)
+
+    # Auto-download LightGCN data files if missing
+    gowalla_dir = data_dir / "gowalla"
+    gowalla_dir.mkdir(parents=True, exist_ok=True)
+    for fname in ["train.txt", "test.txt", "item_list.txt", "user_list.txt"]:
+        fpath = gowalla_dir / fname
+        if not fpath.exists():
+            url = LIGHTGCN_DATA_URL + fname
+            print(f"  Downloading {fname}...")
+            urllib.request.urlretrieve(url, fpath)
 
     # Item mapping: remap_id → original SNAP location_id
     print("  Loading item mapping...")

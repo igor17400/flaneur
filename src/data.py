@@ -14,12 +14,14 @@ _BASE_URL = (
 
 
 def _download_if_missing(data_dir: str) -> tuple[Path, Path]:
-    """Download train.txt and test.txt if not already present."""
+    """Download train.txt, test.txt, and mapping files if not already present."""
     data_path = Path(data_dir)
     data_path.mkdir(parents=True, exist_ok=True)
     train_file = data_path / "train.txt"
     test_file = data_path / "test.txt"
-    for fname, fpath in [("train.txt", train_file), ("test.txt", test_file)]:
+    needed = ["train.txt", "test.txt", "item_list.txt", "user_list.txt"]
+    for fname in needed:
+        fpath = data_path / fname
         if not fpath.exists():
             url = _BASE_URL + fname
             print(f"Downloading {url} ...")
