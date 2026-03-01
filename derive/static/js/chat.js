@@ -45,7 +45,7 @@
     panel.classList.add('open');
     panelOpen = true;
 
-    const autoPrompt = `Analyze user ${uid}. Look up their data, show them on the map, and give a concise geographic analysis with a user_card widget.`;
+    const autoPrompt = `Analyze user ${uid}. Use analyze_behavior to understand their movement patterns, then give a behavioral profile with key insights. Show a user_card widget.`;
     executeChat(autoPrompt);
   }
 
@@ -213,6 +213,24 @@
 
     if (evt.type === 'report') {
       deriveReport.open(evt.data);
+    }
+
+    if (evt.type === 'weave_call') {
+      const link = document.createElement('a');
+      link.href = evt.url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.title = evt.call_id;
+      link.textContent = 'Weave trace';
+      link.style.cssText =
+        'display:block;margin-top:8px;padding-top:6px;' +
+        'border-top:1px solid rgba(255,255,255,0.08);' +
+        'color:rgba(255,255,255,0.35);text-decoration:none;' +
+        'font-size:0.72em;letter-spacing:0.3px;';
+      link.onmouseenter = () => (link.style.color = 'rgba(255,255,255,0.6)');
+      link.onmouseleave = () => (link.style.color = 'rgba(255,255,255,0.35)');
+      bubbleEl.appendChild(link);
+      scrollToBottom();
     }
   }
 

@@ -33,6 +33,8 @@ class GowallaData:
     test_dict: dict[int, list[int]]
     # model_name → {uid → [item_id, ...]}
     predictions: dict[str, dict[int, list[int]]]
+    # model_name → {uid → [score, ...]}  (parallel to predictions)
+    prediction_scores: dict[str, dict[int, list[float]]]
     # model_name → metadata dict
     prediction_meta: dict[str, dict]
     # which model to use by default (best recall, or most recent)
@@ -74,7 +76,13 @@ class GowallaData:
             return sorted(pts, key=lambda p: p["ts"])
 
         history = items_to_points(self.train_dict.get(uid, []))
-        ground_truth = items_to_points(self.test_dict.get(uid, []))
+        ground_truth_full = items_to_points(self.test_dict.get(uid, []))
+
+        # Limit ground truth to match prediction count (top-K=20) for fair visual comparison
+        model_name = model or self.default_model
+        model_preds = self.predictions.get(model_name, {}) if model_name else {}
+        k = len(model_preds.get(uid, [])) or 20
+        ground_truth = ground_truth_full[:k]
 
         if not history:
             return None
@@ -95,21 +103,20 @@ class GowallaData:
         else:
             label = "Neighborhood Local"
 
-        # Resolve which model to use
-        model_name = model or self.default_model
-        model_preds = self.predictions.get(model_name, {}) if model_name else {}
-        model_meta = self.prediction_meta.get(model_name, {}) if model_name else {}
-
         pred_items = model_preds.get(uid, [])
+        model_scores = self.prediction_scores.get(model_name, {})
+        pred_scores = model_scores.get(uid, [])
         predictions = []
-        for iid in pred_items:
+        for idx, iid in enumerate(pred_items):
             org_loc = self.item_remap_to_org.get(iid)
             if org_loc and org_loc in self.loc_coords:
                 lat, lon = self.loc_coords[org_loc]
+                score = pred_scores[idx] if idx < len(pred_scores) else None
                 predictions.append({
                     "lat": round(lat, 6),
                     "lon": round(lon, 6),
                     "item_id": iid,
+                    "score": score,
                     "ts": None,
                 })
 
@@ -205,6 +212,7 @@ def load(data_dir: str | Path) -> GowallaData:
 
     # Model predictions — load ALL files from predictions/ directory
     all_predictions: dict[str, dict[int, list[int]]] = {}
+    all_prediction_scores: dict[str, dict[int, list[float]]] = {}
     all_prediction_meta: dict[str, dict] = {}
     default_model: str | None = None
     best_recall = -1.0
@@ -220,9 +228,12 @@ def load(data_dir: str | Path) -> GowallaData:
                 model_name = pred_data.get("model", pred_path.stem)
                 meta = {k: v for k, v in pred_data.items() if k != "users"}
                 preds = {}
+                scores = {}
                 for uid_str, info in pred_data.get("users", {}).items():
                     preds[int(uid_str)] = info["items"]
+                    scores[int(uid_str)] = info.get("scores", [])
                 all_predictions[model_name] = preds
+                all_prediction_scores[model_name] = scores
                 all_prediction_meta[model_name] = meta
 
                 # Track best model by recall for default
@@ -254,6 +265,7 @@ def load(data_dir: str | Path) -> GowallaData:
         train_dict=train_dict,
         test_dict=test_dict,
         predictions=all_predictions,
+        prediction_scores=all_prediction_scores,
         prediction_meta=all_prediction_meta,
         default_model=default_model,
     )

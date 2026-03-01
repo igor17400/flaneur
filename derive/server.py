@@ -51,27 +51,184 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
-MISTRAL_MODEL = "mistral-medium-latest"
+MISTRAL_MODEL = "mistral-large-latest"
 MAX_TOOL_ROUNDS = 8
 
 
 def build_system_prompt(current_user: int | None, gowalla_data) -> str:
     """Build the agent system prompt with current user context."""
+    from collections import defaultdict
+    from derive.lib.agent_tools import _haversine
+
     template = (PROMPTS_DIR / "agent_system.txt").read_text()
 
     context = ""
     if current_user is not None:
         data = gowalla_data.get_user_geo(current_user)
         if data:
+            history = data["history"]
+            gt = data["ground_truth"]
+            preds = data.get("predictions", [])
+            all_pts = history + gt
+
+            clat = sum(p["lat"] for p in all_pts) / len(all_pts) if all_pts else 0
+            clon = sum(p["lon"] for p in all_pts) / len(all_pts) if all_pts else 0
+
+            # Prediction hits
+            gt_ids = {p["item_id"] for p in gt}
+            hits = sum(1 for p in preds if p["item_id"] in gt_ids)
+
+            # Revisit rate
+            item_visits: dict[int, int] = defaultdict(int)
+            for p in all_pts:
+                item_visits[p["item_id"]] += 1
+            unique_locs = len(item_visits)
+            revisited = sum(1 for c in item_visits.values() if c > 1)
+            revisit_pct = round(revisited / unique_locs * 100, 1) if unique_locs else 0
+
+            # Geographic concentration (top 3 grid cells)
+            GRID = 0.01
+            grid: dict[tuple[int, int], int] = defaultdict(int)
+            for p in all_pts:
+                grid[(int(p["lat"] / GRID), int(p["lon"] / GRID))] += 1
+            top3 = sum(sorted(grid.values(), reverse=True)[:3])
+            concentration = round(top3 / len(all_pts) * 100, 1) if all_pts else 0
+
+            # Avg travel between consecutive check-ins
+            sorted_pts = sorted(all_pts, key=lambda p: p.get("ts", ""))
+            steps = [
+                _haversine(sorted_pts[i - 1]["lat"], sorted_pts[i - 1]["lon"],
+                           sorted_pts[i]["lat"], sorted_pts[i]["lon"])
+                for i in range(1, len(sorted_pts))
+            ]
+            avg_step = round(sum(steps) / len(steps), 1) if steps else 0
+
+            # Active period
+            months = set()
+            for p in all_pts:
+                ts = p.get("ts", "")
+                if ts and len(ts) >= 7:
+                    months.add(ts[:7])
+            sorted_m = sorted(months)
+            period = f"{sorted_m[0]} to {sorted_m[-1]}" if sorted_m else "unknown"
+
             context = (
-                f"\nCurrently viewing User #{current_user} "
-                f"({data['label']}, {len(data['history'])} history, "
-                f"{len(data['ground_truth'])} ground truth, "
-                f"{len(data.get('predictions', []))} predictions, "
-                f"spread={data['spread']})."
+                f"\nCurrently viewing User #{current_user}:"
+                f"\n  Type: {data['label']}, Spread: {data['spread']}, "
+                f"Centroid: ({clat:.2f}, {clon:.2f})"
+                f"\n  Check-ins: {len(history)} history, {len(gt)} test, "
+                f"{unique_locs} unique locations"
+                f"\n  Predictions: {len(preds)} ({hits} exact hits)"
+                f"\n  Revisit rate: {revisit_pct}% of locations visited more than once"
+                f"\n  Geographic concentration: {concentration}% of check-ins in top 3 hotspots"
+                f"\n  Avg travel between check-ins: {avg_step} km"
+                f"\n  Active period: {period}"
+                f"\n→ Use analyze_behavior for full profile, compare_users to contrast with others."
             )
 
     return template.replace("{current_user_context}", context)
+
+
+def _run_agent_loop(mistral_messages: list, gd, sse_cb) -> str:
+    """Run the Mistral agent loop with tool calling, then stream the final response.
+
+    Returns the accumulated response text.
+    """
+    api_key = os.environ.get("MISTRAL_API_KEY", "")
+    client = Mistral(api_key=api_key)
+
+    accumulated = ""
+
+    # Agent loop: non-streaming tool-calling rounds
+    for _round in range(MAX_TOOL_ROUNDS):
+        response = client.chat.complete(
+            model=MISTRAL_MODEL,
+            messages=mistral_messages,
+            tools=TOOL_DEFINITIONS,
+            temperature=0.3,
+        )
+
+        choice = response.choices[0]
+        msg = choice.message
+
+        if msg.tool_calls:
+            mistral_messages.append(msg)
+
+            for tc in msg.tool_calls:
+                fn_name = tc.function.name or ""
+                call_id = tc.id
+
+                raw_args = tc.function.arguments
+                if isinstance(raw_args, str):
+                    try:
+                        fn_args = json.loads(raw_args)
+                    except (json.JSONDecodeError, TypeError):
+                        fn_args = {}
+                elif isinstance(raw_args, dict):
+                    fn_args = raw_args
+                else:
+                    fn_args = {}
+
+                display_name = fn_name
+                if fn_name in ("fly_to", "select_user", "fit_bounds"):
+                    display_name = "navigate_map"
+                elif fn_name.startswith("{"):
+                    display_name = "navigate_map"
+
+                sse_cb({
+                    "type": "tool_call",
+                    "name": display_name,
+                    "args": fn_args,
+                    "call_id": call_id,
+                })
+
+                result, actions = execute_tool(fn_name, fn_args, gd)
+
+                summary = result.pop("_summary", "done")
+                is_error = "error" in result
+                sse_cb({
+                    "type": "tool_result",
+                    "name": display_name,
+                    "call_id": call_id,
+                    "summary": summary,
+                    "error": is_error,
+                })
+
+                for action in actions:
+                    if action.get("name") == "report":
+                        sse_cb({"type": "report", "data": action["data"]})
+                    elif action.get("name") == "widget":
+                        sse_cb({"type": "widget", **action})
+                    else:
+                        sse_cb({"type": "action", **action})
+
+                mistral_messages.append({
+                    "role": "tool",
+                    "name": fn_name,
+                    "content": json.dumps(result),
+                    "tool_call_id": call_id,
+                })
+
+            continue
+
+        break
+
+    # Final streaming response (no tools)
+    stream = client.chat.stream(
+        model=MISTRAL_MODEL,
+        messages=mistral_messages,
+        max_tokens=512,
+        temperature=0.3,
+    )
+
+    for event in stream:
+        token = event.data.choices[0].delta.content
+        if token:
+            accumulated += token
+            sse_cb({"type": "token", "content": token})
+
+    sse_cb({"type": "done"})
+    return accumulated
 
 
 class DeriveHandler(http.server.SimpleHTTPRequestHandler):
@@ -233,109 +390,25 @@ class DeriveHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
 
         try:
-            client = Mistral(api_key=api_key)
-
-            # ── Agent loop: non-streaming tool-calling rounds ──────────────
-            for _round in range(MAX_TOOL_ROUNDS):
-                response = client.chat.complete(
-                    model=MISTRAL_MODEL,
-                    messages=mistral_messages,
-                    tools=TOOL_DEFINITIONS,
-                    temperature=0.3,
-                )
-
-                choice = response.choices[0]
-                msg = choice.message
-
-                # If model wants to call tools
-                if msg.tool_calls:
-                    # Append the assistant message with tool calls
-                    mistral_messages.append(msg)
-
-                    for tc in msg.tool_calls:
-                        fn_name = tc.function.name or ""
-                        call_id = tc.id
-
-                        # Parse arguments robustly
-                        raw_args = tc.function.arguments
-                        if isinstance(raw_args, str):
-                            try:
-                                fn_args = json.loads(raw_args)
-                            except (json.JSONDecodeError, TypeError):
-                                fn_args = {}
-                        elif isinstance(raw_args, dict):
-                            fn_args = raw_args
-                        else:
-                            fn_args = {}
-
-                        # Clean display name for the UI badge
-                        display_name = fn_name
-                        if fn_name in ("fly_to", "select_user", "fit_bounds"):
-                            display_name = "navigate_map"
-                        elif fn_name.startswith("{"):
-                            display_name = "navigate_map"
-
-                        # Stream tool_call event
+            # Wrap in a lightweight weave op so each chat turn gets a trace.
+            # Only the user message (a small string) is passed as input —
+            # gd and sse_cb stay in the closure to avoid serializing heavy objects.
+            @weave.op(name="derive_chat")
+            def _traced_chat(user_message: str) -> str:
+                try:
+                    call = weave.get_current_call()
+                    if call:
                         self._sse_event({
-                            "type": "tool_call",
-                            "name": display_name,
-                            "args": fn_args,
-                            "call_id": call_id,
+                            "type": "weave_call",
+                            "call_id": call.id,
+                            "url": f"https://wandb.ai/igorlima1740/flaneur/weave/calls/{call.id}",
                         })
+                except Exception:
+                    pass
+                return _run_agent_loop(mistral_messages, gd, self._sse_event)
 
-                        # Execute tool (has its own fallback parsing)
-                        result, actions = execute_tool(fn_name, fn_args, gd)
-
-                        # Stream tool_result event
-                        summary = result.pop("_summary", "done")
-                        is_error = "error" in result
-                        self._sse_event({
-                            "type": "tool_result",
-                            "name": display_name,
-                            "call_id": call_id,
-                            "summary": summary,
-                            "error": is_error,
-                        })
-
-                        # Stream any map actions / widgets / reports
-                        for action in actions:
-                            if action.get("name") == "report":
-                                self._sse_event({"type": "report", "data": action["data"]})
-                            elif action.get("name") == "widget":
-                                self._sse_event({"type": "widget", **action})
-                            else:
-                                self._sse_event({"type": "action", **action})
-
-                        # Append tool result to messages
-                        mistral_messages.append({
-                            "role": "tool",
-                            "name": fn_name,
-                            "content": json.dumps(result),
-                            "tool_call_id": call_id,
-                        })
-
-                    # Continue loop for next round of tool calls
-                    continue
-
-                # No tool calls — model wants to give a text response
-                # Switch to streaming for the final answer
-                break
-
-            # ── Final streaming response (no tools) ────────────────────────
-            stream = client.chat.stream(
-                model=MISTRAL_MODEL,
-                messages=mistral_messages,
-                max_tokens=512,
-                temperature=0.3,
-            )
-
-            for event in stream:
-                token = event.data.choices[0].delta.content
-                if token:
-                    self._sse_event({"type": "token", "content": token})
-
-            self._sse_event({"type": "done"})
-
+            last_user_msg = messages[-1].get("content", "") if messages else ""
+            _traced_chat(last_user_msg)
         except Exception as e:
             self._sse_event({"type": "error", "message": str(e)})
             self._sse_event({"type": "done"})

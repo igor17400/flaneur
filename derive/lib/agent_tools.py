@@ -109,6 +109,44 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "analyze_behavior",
+            "description": "Deep behavioral analysis for a single user: visit frequency, geographic clustering, revisit patterns, temporal trends, travel distances, movement style classification, and prediction accuracy breakdown. Use this to understand WHY the model succeeds or fails for a user.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "uid": {
+                        "type": "integer",
+                        "description": "LightGCN user ID (0–29857)",
+                    },
+                },
+                "required": ["uid"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "compare_users",
+            "description": "Deep side-by-side behavioral comparison of two users: geographic overlap, movement similarity, temporal overlap, model performance comparison, and an overall behavioral similarity score (0–100). Use this to explain why the model performs differently for different users.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "uid_a": {
+                        "type": "integer",
+                        "description": "First user ID",
+                    },
+                    "uid_b": {
+                        "type": "integer",
+                        "description": "Second user ID",
+                    },
+                },
+                "required": ["uid_a", "uid_b"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "navigate_map",
             "description": "Drive the browser map to show what you're discussing. ALWAYS use this to visually highlight relevant locations. Actions: fly_to (move camera), select_user (load and display a user's full data), fit_bounds (zoom to fit current data).",
             "parameters": {
@@ -239,6 +277,8 @@ def execute_tool(name: str, args: dict[str, Any], gowalla_data) -> tuple[dict, l
         "navigate_map": _exec_navigate_map,
         "show_widget": _exec_show_widget,
         "generate_report": _exec_generate_report,
+        "analyze_behavior": _exec_analyze_behavior,
+        "compare_users": _exec_compare_users,
     }
 
     executor = executors.get(name)
@@ -447,6 +487,337 @@ def _exec_navigate_map(args: dict, gd) -> tuple[dict, list[dict]]:
 
     else:
         return {"error": f"Unknown action: {action}", "_summary": f"Unknown action"}, []
+
+
+def _exec_analyze_behavior(args: dict, gd) -> tuple[dict, list[dict]]:
+    uid = args["uid"]
+    data = gd.get_user_geo(uid)
+    if data is None:
+        return {"error": f"User {uid} not found", "_summary": f"User #{uid} not found"}, []
+
+    history = data["history"]
+    gt = data["ground_truth"]
+    preds = data.get("predictions", [])
+    label = data["label"]
+    spread = data["spread"]
+    all_pts = history + gt
+
+    # ── Visit frequency & density ────────────────────────────────────
+    timestamps = [p["ts"] for p in all_pts if p.get("ts")]
+    months_active = set()
+    monthly_counts: dict[str, int] = defaultdict(int)
+    for ts in timestamps:
+        if ts and len(ts) >= 7:
+            m = ts[:7]
+            months_active.add(m)
+            monthly_counts[m] += 1
+
+    n_months = max(len(months_active), 1)
+    checkins_per_month = round(len(all_pts) / n_months, 1)
+
+    sorted_months = sorted(months_active) if months_active else []
+    peak_month = max(monthly_counts, key=monthly_counts.get) if monthly_counts else None
+    peak_count = monthly_counts.get(peak_month, 0) if peak_month else 0
+
+    # Activity trend: compare first half vs second half
+    if len(sorted_months) >= 4:
+        mid = len(sorted_months) // 2
+        first_half = sum(monthly_counts.get(m, 0) for m in sorted_months[:mid])
+        second_half = sum(monthly_counts.get(m, 0) for m in sorted_months[mid:])
+        if second_half > first_half * 1.3:
+            trend = "increasing"
+        elif first_half > second_half * 1.3:
+            trend = "decreasing"
+        else:
+            trend = "stable"
+    else:
+        trend = "stable"
+
+    # ── Geographic clustering (grid-based) ───────────────────────────
+    GRID_SIZE = 0.01  # ~1km grid cells
+    grid_cells: dict[tuple[int, int], int] = defaultdict(int)
+    for p in all_pts:
+        cell = (int(p["lat"] / GRID_SIZE), int(p["lon"] / GRID_SIZE))
+        grid_cells[cell] += 1
+
+    top_cells = sorted(grid_cells.values(), reverse=True)
+    top3_count = sum(top_cells[:3]) if top_cells else 0
+    concentration_pct = round(top3_count / len(all_pts) * 100, 1) if all_pts else 0
+
+    n_hotspots = len(grid_cells)
+
+    # ── Revisit rate ─────────────────────────────────────────────────
+    item_visits: dict[int, int] = defaultdict(int)
+    for p in all_pts:
+        item_visits[p["item_id"]] += 1
+
+    unique_locations = len(item_visits)
+    revisited = sum(1 for c in item_visits.values() if c > 1)
+    max_revisits = max(item_visits.values()) if item_visits else 0
+    revisit_rate = round(revisited / unique_locations * 100, 1) if unique_locations else 0
+
+    # ── Travel distances between consecutive check-ins ───────────────
+    sorted_pts = sorted(all_pts, key=lambda p: p.get("ts", ""))
+    step_distances = []
+    for i in range(1, len(sorted_pts)):
+        d = _haversine(
+            sorted_pts[i - 1]["lat"], sorted_pts[i - 1]["lon"],
+            sorted_pts[i]["lat"], sorted_pts[i]["lon"],
+        )
+        step_distances.append(d)
+
+    if step_distances:
+        avg_step_km = round(sum(step_distances) / len(step_distances), 2)
+        sorted_dists = sorted(step_distances)
+        median_step_km = round(sorted_dists[len(sorted_dists) // 2], 2)
+        max_step_km = round(max(step_distances), 2)
+    else:
+        avg_step_km = median_step_km = max_step_km = 0.0
+
+    # ── Movement style classification ────────────────────────────────
+    if avg_step_km < 5 and spread < 2:
+        movement_style = "routine_local"
+    elif avg_step_km > 50 or spread > 50:
+        movement_style = "long_range_traveler"
+    else:
+        movement_style = "mixed"
+
+    # ── Prediction accuracy breakdown ────────────────────────────────
+    gt_ids = {p["item_id"] for p in gt}
+    exact_hits = 0
+    near_misses = 0  # <5km
+    far_misses = 0
+    pred_distances_to_gt = []
+
+    for p in preds:
+        if p["item_id"] in gt_ids:
+            exact_hits += 1
+            pred_distances_to_gt.append(0.0)
+        elif gt:
+            min_dist = min(_haversine(p["lat"], p["lon"], g["lat"], g["lon"]) for g in gt)
+            pred_distances_to_gt.append(min_dist)
+            if min_dist < 5:
+                near_misses += 1
+            else:
+                far_misses += 1
+        else:
+            far_misses += 1
+
+    avg_pred_dist = round(sum(pred_distances_to_gt) / len(pred_distances_to_gt), 2) if pred_distances_to_gt else None
+
+    if preds:
+        if exact_hits / len(preds) > 0.3:
+            model_verdict = "strong_match"
+        elif (exact_hits + near_misses) / len(preds) > 0.3:
+            model_verdict = "neighborhood_match"
+        else:
+            model_verdict = "weak_match"
+    else:
+        model_verdict = "no_predictions"
+
+    # ── Centroid ─────────────────────────────────────────────────────
+    clat = round(sum(p["lat"] for p in all_pts) / len(all_pts), 4) if all_pts else 0
+    clon = round(sum(p["lon"] for p in all_pts) / len(all_pts), 4) if all_pts else 0
+
+    result = {
+        "uid": uid,
+        "label": label,
+        "spread": spread,
+        "centroid": {"lat": clat, "lon": clon},
+        "total_checkins": len(all_pts),
+        "history_count": len(history),
+        "ground_truth_count": len(gt),
+        "unique_locations": unique_locations,
+        "checkins_per_month": checkins_per_month,
+        "months_active": n_months,
+        "active_period": f"{sorted_months[0]} to {sorted_months[-1]}" if sorted_months else "unknown",
+        "peak_month": peak_month,
+        "peak_month_checkins": peak_count,
+        "activity_trend": trend,
+        "monthly_distribution": dict(monthly_counts),
+        "geographic_concentration_pct": concentration_pct,
+        "n_hotspot_cells": n_hotspots,
+        "revisit_rate_pct": revisit_rate,
+        "revisited_locations": revisited,
+        "max_revisits_single_location": max_revisits,
+        "avg_step_km": avg_step_km,
+        "median_step_km": median_step_km,
+        "max_step_km": max_step_km,
+        "movement_style": movement_style,
+        "prediction_count": len(preds),
+        "exact_hits": exact_hits,
+        "near_misses_lt5km": near_misses,
+        "far_misses": far_misses,
+        "avg_prediction_distance_km": avg_pred_dist,
+        "model_verdict": model_verdict,
+        "_summary": (
+            f"User #{uid}: {movement_style}, {revisit_rate}% revisit, "
+            f"{avg_step_km}km avg step, {model_verdict}"
+        ),
+    }
+    return result, []
+
+
+def _exec_compare_users(args: dict, gd) -> tuple[dict, list[dict]]:
+    uid_a = args["uid_a"]
+    uid_b = args["uid_b"]
+
+    data_a = gd.get_user_geo(uid_a)
+    data_b = gd.get_user_geo(uid_b)
+    if data_a is None:
+        return {"error": f"User {uid_a} not found", "_summary": f"User #{uid_a} not found"}, []
+    if data_b is None:
+        return {"error": f"User {uid_b} not found", "_summary": f"User #{uid_b} not found"}, []
+
+    all_a = data_a["history"] + data_a["ground_truth"]
+    all_b = data_b["history"] + data_b["ground_truth"]
+    preds_a = data_a.get("predictions", [])
+    preds_b = data_b.get("predictions", [])
+    gt_a = data_a["ground_truth"]
+    gt_b = data_b["ground_truth"]
+
+    # ── Geographic overlap ───────────────────────────────────────────
+    items_a = {p["item_id"] for p in all_a}
+    items_b = {p["item_id"] for p in all_b}
+    shared_exact = items_a & items_b
+
+    # Nearby locations (within 1km)
+    nearby_count = 0
+    coords_a = [(p["lat"], p["lon"]) for p in all_a]
+    coords_b = [(p["lat"], p["lon"]) for p in all_b]
+
+    # Sample to avoid O(n*m) explosion on large histories
+    sample_a = coords_a[:200]
+    sample_b = coords_b[:200]
+    for la, lo_a in sample_a:
+        for lb, lo_b in sample_b:
+            if _haversine(la, lo_a, lb, lo_b) < 1.0:
+                nearby_count += 1
+                break
+
+    # Centroids
+    clat_a = sum(p["lat"] for p in all_a) / len(all_a) if all_a else 0
+    clon_a = sum(p["lon"] for p in all_a) / len(all_a) if all_a else 0
+    clat_b = sum(p["lat"] for p in all_b) / len(all_b) if all_b else 0
+    clon_b = sum(p["lon"] for p in all_b) / len(all_b) if all_b else 0
+    centroid_distance_km = round(_haversine(clat_a, clon_a, clat_b, clon_b), 2)
+
+    # ── Movement similarity ──────────────────────────────────────────
+    spread_a = data_a["spread"]
+    spread_b = data_b["spread"]
+    max_spread = max(spread_a, spread_b, 0.01)
+    spread_similarity = round(1 - abs(spread_a - spread_b) / max_spread, 3)
+
+    # ── Temporal overlap ─────────────────────────────────────────────
+    months_a = set()
+    months_b = set()
+    for p in all_a:
+        ts = p.get("ts", "")
+        if ts and len(ts) >= 7:
+            months_a.add(ts[:7])
+    for p in all_b:
+        ts = p.get("ts", "")
+        if ts and len(ts) >= 7:
+            months_b.add(ts[:7])
+
+    shared_months = months_a & months_b
+    all_months = months_a | months_b
+    temporal_overlap = round(len(shared_months) / len(all_months), 3) if all_months else 0
+
+    peak_a = None
+    peak_b = None
+    if months_a:
+        mc_a: dict[str, int] = defaultdict(int)
+        for p in all_a:
+            ts = p.get("ts", "")
+            if ts and len(ts) >= 7:
+                mc_a[ts[:7]] += 1
+        peak_a = max(mc_a, key=mc_a.get)
+    if months_b:
+        mc_b: dict[str, int] = defaultdict(int)
+        for p in all_b:
+            ts = p.get("ts", "")
+            if ts and len(ts) >= 7:
+                mc_b[ts[:7]] += 1
+        peak_b = max(mc_b, key=mc_b.get)
+
+    # ── Model performance comparison ─────────────────────────────────
+    gt_ids_a = {p["item_id"] for p in gt_a}
+    gt_ids_b = {p["item_id"] for p in gt_b}
+    hits_a = sum(1 for p in preds_a if p["item_id"] in gt_ids_a)
+    hits_b = sum(1 for p in preds_b if p["item_id"] in gt_ids_b)
+    hit_rate_a = round(hits_a / len(preds_a) * 100, 1) if preds_a else 0
+    hit_rate_b = round(hits_b / len(preds_b) * 100, 1) if preds_b else 0
+
+    # Avg prediction distance to nearest GT
+    def avg_pred_dist(preds, gt_pts):
+        if not preds or not gt_pts:
+            return None
+        total = 0
+        for p in preds:
+            min_d = min(_haversine(p["lat"], p["lon"], g["lat"], g["lon"]) for g in gt_pts)
+            total += min_d
+        return round(total / len(preds), 2)
+
+    avg_dist_a = avg_pred_dist(preds_a, gt_a)
+    avg_dist_b = avg_pred_dist(preds_b, gt_b)
+
+    # ── Behavioral similarity score (0–100) ──────────────────────────
+    # 30% geo overlap, 20% centroid proximity, 20% spread similarity,
+    # 15% temporal overlap, 15% label match
+    max_items = max(len(items_a), len(items_b), 1)
+    geo_score = len(shared_exact) / max_items  # 0–1
+
+    # Centroid proximity: 0 at >500km, 1 at 0km
+    centroid_score = max(0, 1 - centroid_distance_km / 500)
+
+    label_score = 1.0 if data_a["label"] == data_b["label"] else 0.0
+
+    similarity = round(
+        (geo_score * 30 + centroid_score * 20 + spread_similarity * 20
+         + temporal_overlap * 15 + label_score * 15),
+        1,
+    )
+
+    result = {
+        "uid_a": uid_a,
+        "uid_b": uid_b,
+        "label_a": data_a["label"],
+        "label_b": data_b["label"],
+        "geographic_overlap": {
+            "shared_exact_locations": len(shared_exact),
+            "nearby_locations_lt1km": nearby_count,
+            "centroid_distance_km": centroid_distance_km,
+        },
+        "movement_similarity": {
+            "spread_a": spread_a,
+            "spread_b": spread_b,
+            "spread_similarity": spread_similarity,
+            "history_count_a": len(data_a["history"]),
+            "history_count_b": len(data_b["history"]),
+        },
+        "temporal_overlap": {
+            "shared_active_months": len(shared_months),
+            "total_unique_months": len(all_months),
+            "overlap_ratio": temporal_overlap,
+            "peak_month_a": peak_a,
+            "peak_month_b": peak_b,
+        },
+        "model_performance": {
+            "hit_rate_a_pct": hit_rate_a,
+            "hit_rate_b_pct": hit_rate_b,
+            "hits_a": hits_a,
+            "hits_b": hits_b,
+            "avg_pred_distance_a_km": avg_dist_a,
+            "avg_pred_distance_b_km": avg_dist_b,
+        },
+        "behavioral_similarity_score": similarity,
+        "_summary": (
+            f"#{uid_a} ({data_a['label']}) vs #{uid_b} ({data_b['label']}): "
+            f"similarity {similarity}/100, {len(shared_exact)} shared locations"
+        ),
+    }
+    return result, []
 
 
 def _exec_generate_report(args: dict, gd) -> tuple[dict, list[dict]]:
