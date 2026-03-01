@@ -71,7 +71,26 @@ query_weave_traces_tool(
 
 ## Step 4: Generate W&B Report
 
-Use `create_wandb_report_tool` with entity `igorlima1740`, project `flaneur`.
+Use `wandb_workspaces` to build the report programmatically. Entity: `igorlima1740`, Project: `flaneur`.
+
+**Important:** When creating `PanelGrid` with `Runset`, filter to only show runs in the `lgcn_gowalla_full` group:
+
+```python
+wr.PanelGrid(
+    runsets=[wr.Runset(
+        project="flaneur",
+        entity="igorlima1740",
+        filters='Group == "lgcn_gowalla_full"',
+    )],
+    panels=[
+        wr.LinePlot(x="Step", y=["val/recall@20"], title="Val Recall@20"),
+        wr.LinePlot(x="Step", y=["val/ndcg@20"], title="Val NDCG@20"),
+        wr.LinePlot(x="Step", y=["train/bpr_loss"], title="BPR Loss"),
+    ],
+)
+```
+
+This ensures only training runs inside the `lgcn_gowalla_full` group appear in the charts, not unrelated runs.
 
 Structure the report as follows:
 

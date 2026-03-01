@@ -105,5 +105,6 @@ All evaluations are logged to the Weave project `flaneur`:
 ## Workflow Position
 
 ```
-Train → /weave-eval → /analyze-run → /improve-model or /ablation → Train → ...
+Training:   /analyze-run → /improve-model → train → /analyze-run → ...
+Inference:  infer.py → /weave-eval → /eval-report
 ```

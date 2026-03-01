@@ -164,9 +164,10 @@ Also consider code-level improvements:
 2. Use W&B MCP to compare runs
 3. Repeat Phase 2-4 until metrics improve
 
-### Phase 5: Report
-1. Use `create_wandb_report_tool` to generate a W&B Report
-2. Include: training curves, metric comparisons, what the agent changed and why
+### Phase 5: Inference & Evaluation
+1. Run `infer.py` on best checkpoints to generate prediction files
+2. Use `/weave-eval` to A/B test best models on pre-computed predictions
+3. Use `/eval-report` to generate a W&B Report with full evaluation results
 
 ---
 

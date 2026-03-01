@@ -6,15 +6,20 @@ W&B entity: `igorlima1740`, project: `flaneur`.
 
 ## Self-Improvement Loop
 
-This project uses three Claude Code skills in a loop:
+This project uses Claude Code skills in two phases:
 
+### Training Loop
 1. **`/analyze-run`** — Query W&B MCP for training metrics, diagnose issues
 2. **`/improve-model`** — Apply config/code changes based on analysis
-3. **`/eval-report`** — Run Weave test evaluation and generate W&B Report
+
+### Inference & Evaluation
+3. **`/weave-eval`** — A/B test best models on pre-computed predictions
+4. **`/eval-report`** — Generate W&B Report with full evaluation results
 
 ### Workflow
 ```
-/analyze-run → /improve-model → train → /analyze-run → ... → /eval-report
+Training:   /analyze-run → /improve-model → train → /analyze-run → ...
+Inference:  infer.py → /weave-eval → /eval-report
 ```
 
 ## Key Commands
