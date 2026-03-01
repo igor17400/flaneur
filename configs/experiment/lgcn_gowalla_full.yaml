@@ -1,6 +1,6 @@
 # @package _global_
-# embed_dim 128, n_layers 4, no dropout, lighter L2 reg (1e-5),
-# batch_size 2048→8192 for ~4x faster epochs, 100 epochs. Xavier init in code.
+# Training best two models (dim=128, dim=256) for 100 epochs.
+# Base: 4-layer, lr=1e-3, reg=1e-5, n_negatives=3.
 
 wandb:
   project: flaneur
@@ -19,9 +19,10 @@ data:
 train:
   lr: 1e-3
   reg_weight: 1e-5
-  batch_size: 8192
+  batch_size: 2048
   epochs: 100
   topk: 20
   eval_every: 5
   seed: 2020
   patience: 0
+  n_negatives: 3

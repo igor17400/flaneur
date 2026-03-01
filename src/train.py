@@ -52,6 +52,8 @@ def train(cfg, dataset: Dataset):
         new_params = optax.apply_updates(params, updates)
         return new_params, new_opt_state, loss
 
+    n_negatives = getattr(cfg.train, "n_negatives", 1)
+
     rng = np.random.default_rng(cfg.train.seed)
     best_recall = 0.0
     best_ndcg = 0.0
@@ -78,7 +80,7 @@ def train(cfg, dataset: Dataset):
 
             # Sample negatives
             users, pos_items, neg_items = sample_negatives(
-                dataset.train_dict, dataset.n_items, rng
+                dataset.train_dict, dataset.n_items, rng, n_negatives
             )
 
             # Shuffle

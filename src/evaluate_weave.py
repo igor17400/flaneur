@@ -3,13 +3,11 @@
 import argparse
 import asyncio
 import json
-import os
 from pathlib import Path
 
 import numpy as np
 import weave
 from dotenv import load_dotenv
-from mistralai import Mistral
 from rich.console import Console
 from rich.table import Table
 
@@ -20,15 +18,6 @@ PROMPTS_DIR = PROJECT_ROOT / "prompts"
 CHECKPOINT_DIR = PROJECT_ROOT / "checkpoints"
 console = Console()
 
-# ---------------------------------------------------------------------------
-# Global state (set by load_checkpoint)
-# ---------------------------------------------------------------------------
-user_embed: np.ndarray = None
-item_embed: np.ndarray = None
-train_dict: dict[int, list[int]] = {}
-test_dict: dict[int, list[int]] = {}
-item_popularity: np.ndarray = None
-run_config: dict = {}
 TOPK = 20
 
 
@@ -72,68 +61,113 @@ def list_checkpoints() -> list[Path]:
     return runs
 
 
-def load_checkpoint(checkpoint_dir: str):
-    """Load saved embeddings and metadata from training."""
-    global user_embed, item_embed, train_dict, test_dict, run_config, item_popularity
-
-    ckpt = Path(checkpoint_dir)
-    data = np.load(ckpt / "embeddings.npz")
-    all_embed = data["all_embed"]
-    n_users = int(data["n_users"])
-    n_items = int(data["n_items"])
-
-    user_embed = all_embed[:n_users]
-    item_embed = all_embed[n_users : n_users + n_items]
-
-    with open(ckpt / "metadata.json") as f:
-        meta = json.load(f)
-
-    train_dict = {int(k): v for k, v in meta["train_dict"].items()}
-    test_dict = {int(k): v for k, v in meta["test_dict"].items()}
-    run_config = meta.get("config", {})
-
-    # Pre-compute item popularity (avoids O(n_users) per scorer call)
-    item_popularity = np.zeros(n_items, dtype=np.int32)
-    for items in train_dict.values():
-        for item in items:
-            if item < n_items:
-                item_popularity[item] += 1
-
-    console.print(
-        f"[bold]Loaded:[/bold] {meta.get('run_name', ckpt.name)} — "
-        f"{n_users} users, {n_items} items, embed_dim={user_embed.shape[1]}"
-    )
-
-
 # ---------------------------------------------------------------------------
-# Weave ops: recommendation + scorers
+# Weave Model: LightGCN recommender with config tracking
 # ---------------------------------------------------------------------------
 
 
+class LightGCNModel(weave.Model):
+    """LightGCN recommender model — Weave tracks all attributes in the leaderboard."""
+
+    # Model config
+    embed_dim: int
+    n_layers: int
+    embed_dropout: float
+
+    # Training config
+    lr: float
+    reg_weight: float
+    batch_size: int
+    epochs: int
+    n_negatives: int
+
+    # Validation metrics (from training)
+    val_recall_at_20: float
+    val_ndcg_at_20: float
+
+    # Runtime state (excluded from Weave versioning)
+    _user_embed: np.ndarray = None
+    _item_embed: np.ndarray = None
+    _train_dict: dict = {}
+    _test_dict: dict = {}
+    _item_popularity: np.ndarray = None
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    @classmethod
+    def from_checkpoint(cls, checkpoint_dir: str) -> "LightGCNModel":
+        """Load a model from a training checkpoint."""
+        ckpt = Path(checkpoint_dir)
+        data = np.load(ckpt / "embeddings.npz")
+        all_embed = data["all_embed"]
+        n_users = int(data["n_users"])
+        n_items = int(data["n_items"])
+
+        with open(ckpt / "metadata.json") as f:
+            meta = json.load(f)
+
+        cfg = meta.get("config", {})
+        model_cfg = cfg.get("model", {})
+        train_cfg = cfg.get("train", {})
+
+        model = cls(
+            embed_dim=model_cfg.get("embed_dim", 64),
+            n_layers=model_cfg.get("n_layers", 3),
+            embed_dropout=model_cfg.get("embed_dropout", 0.0),
+            lr=train_cfg.get("lr", 1e-3),
+            reg_weight=train_cfg.get("reg_weight", 1e-5),
+            batch_size=train_cfg.get("batch_size", 2048),
+            epochs=train_cfg.get("epochs", 100),
+            n_negatives=train_cfg.get("n_negatives", 1),
+            val_recall_at_20=meta.get("best_val_recall@20", 0.0),
+            val_ndcg_at_20=meta.get("best_val_ndcg@20", 0.0),
+        )
+
+        model._user_embed = all_embed[:n_users]
+        model._item_embed = all_embed[n_users : n_users + n_items]
+        model._train_dict = {int(k): v for k, v in meta["train_dict"].items()}
+        model._test_dict = {int(k): v for k, v in meta["test_dict"].items()}
+        model._config = cfg
+
+        # Pre-compute item popularity
+        item_popularity = np.zeros(n_items, dtype=np.int32)
+        for items in model._train_dict.values():
+            for item in items:
+                if item < n_items:
+                    item_popularity[item] += 1
+        model._item_popularity = item_popularity
+
+        console.print(
+            f"[bold]Loaded:[/bold] {meta.get('run_name', ckpt.name)} — "
+            f"{n_users} users, {n_items} items, embed_dim={model.embed_dim}, "
+            f"reg={model.reg_weight}, lr={model.lr}, layers={model.n_layers}"
+        )
+        return model
+
+    @weave.op
+    def predict(self, user_id: int) -> dict:
+        """Generate top-K recommendations for a single test user."""
+        scores = self._user_embed[user_id] @ self._item_embed.T
+
+        # Mask items seen during training
+        train_items = self._train_dict.get(user_id, [])
+        scores[train_items] = -np.inf
+
+        top_k_idx = np.argpartition(-scores, TOPK)[:TOPK]
+        top_k_idx = top_k_idx[np.argsort(-scores[top_k_idx])]
+
+        return {
+            "user_id": user_id,
+            "recommendations": top_k_idx.tolist(),
+            "scores": scores[top_k_idx].tolist(),
+        }
+
+
 @weave.op
-def recommend(user_id: int) -> dict:
-    """Generate top-K recommendations for a single test user."""
-    scores = user_embed[user_id] @ item_embed.T
-
-    # Mask items seen during training
-    train_items = train_dict.get(user_id, [])
-    scores[train_items] = -np.inf
-
-    top_k_idx = np.argpartition(-scores, TOPK)[:TOPK]
-    top_k_idx = top_k_idx[np.argsort(-scores[top_k_idx])]
-
-    return {
-        "user_id": user_id,
-        "recommendations": top_k_idx.tolist(),
-        "scores": scores[top_k_idx].tolist(),
-    }
-
-
-@weave.op
-def recall_scorer(user_id: int, model_output: dict) -> dict:
+def recall_scorer(user_id: int, output: dict) -> dict:
     """Recall@K: fraction of test items found in top-K."""
-    recs = set(model_output["recommendations"])
-    ground_truth = test_dict.get(user_id, [])
+    recs = set(output["recommendations"])
+    ground_truth = _active_model._test_dict.get(user_id, [])
     if not ground_truth:
         return {"recall": 0.0, "hits": 0, "n_test_items": 0}
     hits = sum(1 for item in ground_truth if item in recs)
@@ -145,10 +179,10 @@ def recall_scorer(user_id: int, model_output: dict) -> dict:
 
 
 @weave.op
-def ndcg_scorer(user_id: int, model_output: dict) -> dict:
+def ndcg_scorer(user_id: int, output: dict) -> dict:
     """NDCG@K: normalized discounted cumulative gain."""
-    recs = model_output["recommendations"]
-    ground_truth = set(test_dict.get(user_id, []))
+    recs = output["recommendations"]
+    ground_truth = set(_active_model._test_dict.get(user_id, []))
     if not ground_truth:
         return {"ndcg": 0.0}
 
@@ -162,10 +196,10 @@ def ndcg_scorer(user_id: int, model_output: dict) -> dict:
 
 
 @weave.op
-def diversity_scorer(model_output: dict) -> dict:
+def diversity_scorer(output: dict) -> dict:
     """Intra-list diversity: 1 - avg pairwise cosine similarity."""
-    recs = model_output["recommendations"]
-    embeds = item_embed[recs]
+    recs = output["recommendations"]
+    embeds = _active_model._item_embed[recs]
     norms = np.linalg.norm(embeds, axis=1, keepdims=True)
     embeds_norm = embeds / np.maximum(norms, 1e-8)
     sim = embeds_norm @ embeds_norm.T
@@ -177,10 +211,10 @@ def diversity_scorer(model_output: dict) -> dict:
 
 
 @weave.op
-def coverage_scorer(model_output: dict) -> dict:
+def coverage_scorer(output: dict) -> dict:
     """Per-user item popularity stats (cold items vs popular)."""
-    recs = model_output["recommendations"]
-    pops = item_popularity[recs]
+    recs = output["recommendations"]
+    pops = _active_model._item_popularity[recs]
     return {
         "avg_item_popularity": float(np.mean(pops)),
         "min_item_popularity": int(np.min(pops)),
@@ -188,39 +222,18 @@ def coverage_scorer(model_output: dict) -> dict:
     }
 
 
+# Global reference to the active model (set before evaluation)
+_active_model: LightGCNModel = None
+
+
 # ---------------------------------------------------------------------------
-# Mistral reflection (called after evaluation)
+# Mistral reflection — disabled for now, to be used in the platform layer.
+# The function is preserved for future integration where Mistral can:
+# - Compare traces across A/B groups
+# - Analyze per-user failure patterns
+# - Generate stakeholder summaries
+# - Track its own reasoning quality via Weave traces
 # ---------------------------------------------------------------------------
-
-
-@weave.op
-def mistral_reflect(eval_summary: dict, config: dict) -> dict:
-    """Mistral analyzes aggregate evaluation results and suggests improvements."""
-    client = Mistral(api_key=os.environ["MISTRAL_API_KEY"])
-
-    template = (PROMPTS_DIR / "reflection.txt").read_text()
-    prompt = template.format(
-        config=json.dumps(config, indent=2),
-        eval_summary=json.dumps(eval_summary, indent=2, default=str),
-    )
-
-    response = client.chat.complete(
-        model="mistral-small-latest",
-        messages=[{"role": "user", "content": prompt}],
-    )
-    content = response.choices[0].message.content
-
-    # Try to parse JSON from response
-    try:
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0].strip()
-        analysis = json.loads(content)
-    except (json.JSONDecodeError, IndexError):
-        analysis = {"raw_analysis": content}
-
-    return analysis
 
 
 # ---------------------------------------------------------------------------
@@ -228,17 +241,24 @@ def mistral_reflect(eval_summary: dict, config: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
-async def run_evaluation(checkpoint_path: Path, n_users: int = 200):
+async def run_evaluation(checkpoint_path: Path, n_users: int = 200, user_ids: list[int] | None = None):
     """Run the full Weave evaluation pipeline."""
-    weave.init("flaneur")
-    load_checkpoint(str(checkpoint_path))
+    global _active_model
 
-    # Sample test users (those with ground truth)
-    test_users = [uid for uid in sorted(test_dict.keys()) if test_dict[uid]]
-    if n_users < len(test_users):
-        rng = np.random.default_rng(42)
-        sampled = rng.choice(len(test_users), size=n_users, replace=False)
-        test_users = [test_users[i] for i in sorted(sampled)]
+    weave.init("flaneur")
+    model = LightGCNModel.from_checkpoint(str(checkpoint_path))
+    _active_model = model
+
+    if user_ids is not None:
+        # Use pre-assigned user IDs (e.g., from A/B test split)
+        test_users = user_ids
+    else:
+        # Sample test users (those with ground truth)
+        test_users = [uid for uid in sorted(model._test_dict.keys()) if model._test_dict[uid]]
+        if n_users < len(test_users):
+            rng = np.random.default_rng(42)
+            sampled = rng.choice(len(test_users), size=n_users, replace=False)
+            test_users = [test_users[i] for i in sorted(sampled)]
 
     dataset = [{"user_id": uid} for uid in test_users]
     console.print(f"Running evaluation on [bold]{len(dataset)}[/bold] test users...")
@@ -249,16 +269,44 @@ async def run_evaluation(checkpoint_path: Path, n_users: int = 200):
         name=f"eval_{checkpoint_path.name}",
     )
 
-    results = await evaluation.evaluate(recommend)
+    results = await evaluation.evaluate(model)
     console.print("\n[bold green]--- Evaluation Results ---[/bold green]")
     console.print_json(json.dumps(results, default=str))
 
-    # Mistral reflection on aggregate results
-    console.print("\n[bold yellow]--- Mistral Reflection ---[/bold yellow]")
-    analysis = mistral_reflect(results, run_config)
-    console.print_json(json.dumps(analysis, default=str))
+    # Publish leaderboard for side-by-side model comparison in Weave UI
+    try:
+        from weave.flow import leaderboard as lb
+        from weave.trace.ref_util import get_ref
 
-    return results, analysis
+        eval_ref = get_ref(evaluation)
+        if eval_ref:
+            spec = lb.Leaderboard(
+                name="LightGCN Gowalla",
+                description="Compare LightGCN checkpoints on held-out test users",
+                columns=[
+                    lb.LeaderboardColumn(
+                        evaluation_object_ref=eval_ref.uri(),
+                        scorer_name="recall_scorer",
+                        summary_metric_path="recall.mean",
+                    ),
+                    lb.LeaderboardColumn(
+                        evaluation_object_ref=eval_ref.uri(),
+                        scorer_name="ndcg_scorer",
+                        summary_metric_path="ndcg.mean",
+                    ),
+                    lb.LeaderboardColumn(
+                        evaluation_object_ref=eval_ref.uri(),
+                        scorer_name="diversity_scorer",
+                        summary_metric_path="diversity.mean",
+                    ),
+                ],
+            )
+            weave.publish(spec)
+            console.print("[bold green]Leaderboard published to Weave UI (Leaders tab)[/bold green]")
+    except Exception as e:
+        console.print(f"[yellow]Leaderboard publish skipped: {e}[/yellow]")
+
+    return results
 
 
 def select_checkpoint(run_name: str | None = None) -> Path:
@@ -300,6 +348,20 @@ def main():
         help="Checkpoint run name (omit to list and select interactively)",
     )
     parser.add_argument(
+        "--compare",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Compare multiple checkpoints on SAME users: --compare ckpt1 ckpt2",
+    )
+    parser.add_argument(
+        "--ab-test",
+        type=str,
+        nargs=2,
+        default=None,
+        help="A/B test with non-overlapping user groups: --ab-test model_a model_b",
+    )
+    parser.add_argument(
         "--n_users",
         type=int,
         default=200,
@@ -314,6 +376,77 @@ def main():
 
     if args.list:
         list_checkpoints()
+        return
+
+    if args.ab_test:
+        # A/B test: split users into non-overlapping groups
+        if len(args.ab_test) != 2:
+            console.print("[red]A/B test requires exactly 2 checkpoints.[/red]")
+            raise SystemExit(1)
+
+        console.print(f"\n[bold magenta]{'='*60}[/bold magenta]")
+        console.print(f"[bold magenta]A/B Test Simulation[/bold magenta]")
+        console.print(f"[bold magenta]{'='*60}[/bold magenta]")
+        console.print(f"  Group A: {args.ab_test[0]}")
+        console.print(f"  Group B: {args.ab_test[1]}")
+        console.print(f"  Users per group: {args.n_users}")
+        console.print()
+
+        # Load one checkpoint to get test users
+        path_a = select_checkpoint(args.ab_test[0])
+        path_b = select_checkpoint(args.ab_test[1])
+
+        # Get all test users from checkpoint A (same data for both)
+        import json as _json
+        with open(path_a / "metadata.json") as f:
+            meta = _json.load(f)
+        all_test_users = [int(k) for k, v in meta["test_dict"].items() if v]
+        all_test_users.sort()
+
+        total_needed = args.n_users * 2
+        rng = np.random.default_rng(42)
+        if total_needed <= len(all_test_users):
+            sampled_indices = rng.choice(len(all_test_users), size=total_needed, replace=False)
+            sampled_indices.sort()
+            sampled_users = [all_test_users[i] for i in sampled_indices]
+        else:
+            sampled_users = all_test_users
+
+        # Split into two non-overlapping groups
+        mid = len(sampled_users) // 2
+        group_a_users = sampled_users[:mid]
+        group_b_users = sampled_users[mid:]
+
+        console.print(f"  Group A users: {len(group_a_users)} (IDs {group_a_users[0]}..{group_a_users[-1]})")
+        console.print(f"  Group B users: {len(group_b_users)} (IDs {group_b_users[0]}..{group_b_users[-1]})")
+        console.print()
+
+        # Evaluate Group A with Model A
+        console.print(f"[bold cyan]{'='*60}[/bold cyan]")
+        console.print(f"[bold cyan]Group A → Model: {args.ab_test[0]}[/bold cyan]")
+        console.print(f"[bold cyan]{'='*60}[/bold cyan]")
+        asyncio.run(run_evaluation(path_a, args.n_users, user_ids=group_a_users))
+
+        # Evaluate Group B with Model B
+        console.print(f"\n[bold cyan]{'='*60}[/bold cyan]")
+        console.print(f"[bold cyan]Group B → Model: {args.ab_test[1]}[/bold cyan]")
+        console.print(f"[bold cyan]{'='*60}[/bold cyan]")
+        asyncio.run(run_evaluation(path_b, args.n_users, user_ids=group_b_users))
+
+        console.print(f"\n[bold green]A/B test complete![/bold green]")
+        console.print("[bold]Compare groups in the Weave leaderboard — each group has different users, simulating real traffic splitting.[/bold]")
+        return
+
+    if args.compare:
+        # Evaluate multiple checkpoints on the SAME users (controlled comparison)
+        for ckpt_name in args.compare:
+            console.print(f"\n[bold cyan]{'='*60}[/bold cyan]")
+            console.print(f"[bold cyan]Evaluating: {ckpt_name}[/bold cyan]")
+            console.print(f"[bold cyan]{'='*60}[/bold cyan]")
+            checkpoint_path = select_checkpoint(ckpt_name)
+            asyncio.run(run_evaluation(checkpoint_path, args.n_users))
+        console.print(f"\n[bold green]All {len(args.compare)} models evaluated![/bold green]")
+        console.print("[bold]Compare them in the Weave leaderboard.[/bold]")
         return
 
     checkpoint_path = select_checkpoint(args.run)

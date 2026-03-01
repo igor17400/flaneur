@@ -83,18 +83,20 @@ def sample_negatives(
     train_dict: dict[int, list[int]],
     n_items: int,
     rng: np.random.Generator,
+    n_negatives: int = 1,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Generate one negative sample per positive interaction (rejection sampling)."""
+    """Generate n_negatives negative samples per positive interaction."""
     users, pos_items, neg_items = [], [], []
     for user, items in train_dict.items():
         item_set = set(items)
         for item in items:
-            users.append(user)
-            pos_items.append(item)
-            neg = rng.integers(0, n_items)
-            while neg in item_set:
+            for _ in range(n_negatives):
+                users.append(user)
+                pos_items.append(item)
                 neg = rng.integers(0, n_items)
-            neg_items.append(neg)
+                while neg in item_set:
+                    neg = rng.integers(0, n_items)
+                neg_items.append(neg)
     return (
         np.array(users, dtype=np.int32),
         np.array(pos_items, dtype=np.int32),
